@@ -26,8 +26,10 @@ import {
   MeshStandardMaterial,
   Object3D,
   SphereGeometry,
+  Sprite,
+  SpriteMaterial,
 } from 'three';
-import type { EnemyArchetypeId } from '../../core/config';
+import { HEALTH_BAR, ENEMY_ARCHETYPES, type EnemyArchetypeId } from '../../core/config';
 import type { EnemyState } from '../../game/enemies/EnemyState';
 import { LAYER_DEFAULT } from './CharacterLoader';
 
@@ -55,6 +57,8 @@ interface BodySlot {
   readonly leaner: Object3D | null;
   /** Every mesh under the body, so the shadow flags can be switched in one place. */
   readonly meshes: Mesh[];
+  /** The red bar over this body's head. */
+  readonly bar: BarSlot;
   /** Seconds since this body's enemy stopped being reported, or `null`. */
   deadSince: number | null;
   /**
@@ -82,6 +86,30 @@ const PALETTE = {
   wardenGlow: 0xff7a2a,
 } as const;
 
+/**
+ * The two quads of one enemy's health bar.
+ *
+ * A pair of **sprites** rather than meshes or DOM. Sprites billboard for free (the renderer
+ * drops their rotation and keeps their world scale), which is what makes the bar readable
+ * from any angle without a camera reference in this layer's signature — a `cameraQuaternion`
+ * parameter would be one more thing the composition root has to remember to pass, and this
+ * project has already paid for that class of mistake twice.
+ *
+ * `width` is the configured full-health width in metres; the fill is scaled against it.
+ */
+interface BarSlot {
+  /** Positioned above the head, in the body's own frame. */
+  readonly root: Group;
+  readonly fill: Sprite;
+  readonly width: number;
+}
+
+/** Materials shared by every bar in one view, and disposed with it. */
+interface BarMaterials {
+  readonly track: SpriteMaterial;
+  readonly fill: SpriteMaterial;
+}
+
 /** Seconds a corpse lies on the ground before its slot is recycled. */
 const CORPSE_LIFE = 1.4;
 
@@ -89,6 +117,33 @@ const CORPSE_LIFE = 1.4;
 export function createEnemyView(): EnemyView {
   const root = new Group();
   root.name = 'enemies';
+
+  /**
+   * One pair of materials for every bar in the scene.
+   *
+   * Per-view rather than per-body: the colour and the draw-order rules are identical on
+   * every bar, and 120 enemies would otherwise mean 240 materials. They are not handed to
+   * the generic mesh disposal in `dispose()` (sprites are not meshes), so they are kept
+   * here and released explicitly.
+   *
+   * `depthWrite: false` on both because the two quads are coplanar — they would z-fight.
+   * `depthTest` stays on, so a crate still hides the bar behind it. `toneMapped: false` so
+   * the fill is the configured red rather than the tone mapper's idea of it.
+   */
+  const barMaterials: BarMaterials = {
+    track: new SpriteMaterial({
+      color: HEALTH_BAR.trackColour,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+    fill: new SpriteMaterial({
+      color: HEALTH_BAR.fillColour,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  };
 
   const pools = new Map<EnemyArchetypeId, BodySlot[]>();
   /** Slots on screen, live bodies and corpses alike. */
@@ -110,6 +165,7 @@ export function createEnemyView(): EnemyView {
       slot.claimed = true;
       slot.deadSince = null;
       slot.root.visible = true;
+      slot.bar.root.visible = true;
       slot.root.scale.setScalar(1);
       slot.root.rotation.set(0, 0, 0);
       setShadowCasting(slot, true);
@@ -119,6 +175,7 @@ export function createEnemyView(): EnemyView {
     const reused = pool && pool.length > 0 ? pool.pop() : undefined;
     if (reused) {
       reused.root.visible = true;
+      reused.bar.root.visible = true;
       reused.claimed = true;
       reused.root.scale.setScalar(1);
       reused.root.rotation.set(0, 0, 0);
@@ -127,7 +184,7 @@ export function createEnemyView(): EnemyView {
       live.push(reused);
       return reused;
     }
-    const slot = buildBody(kind);
+    const slot = buildBody(kind, barMaterials);
     root.add(slot.root);
     live.push(slot);
     return slot;
@@ -182,6 +239,9 @@ export function createEnemyView(): EnemyView {
         slot.deadSince = 0;
         // The body is done being simulated, so it is done being drawn twice.
         setShadowCasting(slot, false);
+        // A corpse has no health to report. Its bar goes on the frame of the kill, the
+        // same frame the body stops being drawn into the shadow map.
+        slot.bar.root.visible = false;
       }
       for (let i = live.length - 1; i >= 0; i -= 1) {
         const slot = live[i];
@@ -202,6 +262,9 @@ export function createEnemyView(): EnemyView {
         if (Array.isArray(material)) for (const entry of material) entry.dispose();
         else material?.dispose();
       });
+      // Sprites are not meshes, so the traversal above never reaches these.
+      barMaterials.track.dispose();
+      barMaterials.fill.dispose();
       root.clear();
       pools.clear();
       live.length = 0;
@@ -217,6 +280,20 @@ function syncBody(slot: BodySlot, enemy: EnemyState, alpha: number): void {
     enemy.previousPosition.z + (enemy.position.z - enemy.previousPosition.z) * alpha,
   );
   slot.root.rotation.y = enemy.view.yaw;
+
+  // --- Health bar ------------------------------------------------------------
+  // `stats.maxHealth` rather than a shared archetype constant: the store hands each body
+  // its own scaled copy (see plan §5.3, item 3), and reading the unscaled table here would
+  // draw a boss with a bar that never empties.
+  //
+  // The fill is scaled about the bar's **centre** and never moved sideways. That is
+  // deliberate: a sprite's rotation is replaced by the camera's, but its position is not,
+  // so a lateral offset would push the shrinking end along the body's own facing axis —
+  // correct only while the enemy happens to face the camera. Symmetric shrink needs no
+  // direction at all and reads the same from every angle.
+  const maxHealth = enemy.stats.maxHealth;
+  const fraction = maxHealth > 0 ? Math.max(0, Math.min(1, enemy.health / maxHealth)) : 0;
+  slot.bar.fill.scale.x = Math.max(1e-3, slot.bar.width * fraction);
 
   // --- Telegraph -------------------------------------------------------------
   // The glow is the player's only warning, so it is a two-channel cue: emissive
@@ -265,11 +342,13 @@ function setShadowCasting(slot: BodySlot, cast: boolean): void {
 }
 
 /** Builds one body. Shared geometry, per-kind silhouette. */
-function buildBody(kind: EnemyArchetypeId): BodySlot {
+function buildBody(kind: EnemyArchetypeId, barMaterials: BarMaterials): BodySlot {
   const root = new Group();
   root.name = `enemy:${kind}`;
   const glow: { material: MeshStandardMaterial; base: number }[] = [];
   const meshes: Mesh[] = [];
+  const bar = buildBar(kind, barMaterials);
+  root.add(bar.root);
   let leaner: Object3D | null = null;
 
   const addMesh = (mesh: Mesh): Mesh => {
@@ -325,7 +404,7 @@ function buildBody(kind: EnemyArchetypeId): BodySlot {
     addMesh(head);
     leaner = head;
 
-    return { root, kind, glow, leaner, meshes, deadSince: null, claimed: true };
+    return { root, kind, glow, leaner, meshes, bar, deadSince: null, claimed: true };
   }
 
   // Stalker: narrow, forward-leaning, glowing head. Reads as an animal.
@@ -366,5 +445,43 @@ function buildBody(kind: EnemyArchetypeId): BodySlot {
   addMesh(head);
   leaner = head;
 
-  return { root, kind, glow, leaner, meshes, deadSince: null, claimed: true };
+  return { root, kind, glow, leaner, meshes, bar, deadSince: null, claimed: true };
+}
+
+/**
+ * Builds the two quads that sit over one body's head.
+ *
+ * Sizes come from `HEALTH_BAR` per archetype, and the height comes from the archetype's own
+ * `height` — the bar has to clear the silhouette it belongs to, and a bar placed at a fixed
+ * altitude would sit inside the Warden's chest while floating a metre above the Stalker.
+ * The body is scaled and rotated by the collapse and the Warden's breathing; the bar rides
+ * along, which is why nothing here is animated per frame.
+ */
+function buildBar(kind: EnemyArchetypeId, materials: BarMaterials): BarSlot {
+  const root = new Group();
+  root.name = `enemy:${kind}:bar`;
+  root.position.y = ENEMY_ARCHETYPES[kind].height + HEALTH_BAR.topGap[kind];
+
+  const width = HEALTH_BAR.width[kind];
+  const height = HEALTH_BAR.height[kind];
+
+  const track = new Sprite(materials.track);
+  track.name = 'health-track';
+  track.scale.set(width, height, 1);
+  track.renderOrder = HEALTH_BAR.trackOrder;
+  // Per sprite, never on the group: `Object3D.layers` is not inherited. The same trap the
+  // body meshes and `CharacterLoader` document.
+  track.layers.disableAll();
+  track.layers.enable(LAYER_DEFAULT);
+  root.add(track);
+
+  const fill = new Sprite(materials.fill);
+  fill.name = 'health-fill';
+  fill.scale.set(width, height, 1);
+  fill.renderOrder = HEALTH_BAR.fillOrder;
+  fill.layers.disableAll();
+  fill.layers.enable(LAYER_DEFAULT);
+  root.add(fill);
+
+  return { root, fill, width };
 }

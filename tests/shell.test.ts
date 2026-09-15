@@ -74,6 +74,35 @@ describe('boot veil', () => {
   });
 });
 
+describe('pause menu', () => {
+  it('ships the three choices as static markup, hidden, and nowhere else', () => {
+    const html = read('index.html');
+    for (const label of ['结束暂停', '重新开始', '返回主界面']) expect(html).toContain(label);
+    for (const id of ['pause-menu', 'pause-resume', 'pause-restart', 'pause-main', 'pause-warn']) {
+      expect(html).toContain(`id="${id}"`);
+    }
+    // The panel must start hidden: the module shows it when Esc releases the pointer, and a
+    // panel that shipped visible would cover the boot screen with a paused game.
+    expect(html).toMatch(/id="pause-menu"[^>]*hidden/);
+    // A refused pointer lock is reported on the *visible* overlay. The veil's own warn line
+    // is inside the hidden veil while this panel is up, so it cannot be the only one.
+    expect(html).toMatch(/id="pause-warn"[^>]*role="alert"/);
+  });
+
+  it('routes a pause through its own overlay rather than reusing the veil', () => {
+    const main = read('src/main.ts');
+    // The defect: Esc used to reopen the opaque veil, i.e. what the player reads as the
+    // title screen, with no way to restart or to leave the run.
+    expect(main).toContain('hud.showPause()');
+    // And the three choices go through the module that owns their wiring, which is the part
+    // a unit test can click.
+    expect(main).toContain('createPauseMenu(');
+    expect(main).toMatch(/requireElement\('pause-resume'\)/);
+    expect(main).toMatch(/requireElement\('pause-restart'\)/);
+    expect(main).toMatch(/requireElement\('pause-main'\)/);
+  });
+});
+
 describe('desktop shell', () => {
   it('preload still exposes exactly one frozen object and no IPC', () => {
     const preload = read('electron/preload.cjs');

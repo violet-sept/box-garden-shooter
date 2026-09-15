@@ -155,6 +155,71 @@
       }
 
       /* ---------------------------------------------------------------------
+         Pause menu (Esc).
+
+         Its own element rather than a second message on the veil, and
+         semi-transparent on purpose: the veil is opaque and its click means
+         "start", so reusing it made Esc look like a return to the title screen.
+         The frozen arena stays visible behind this one, dimmed.
+         --------------------------------------------------------------------- */
+      #pause-menu {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        background: rgba(7, 9, 13, 0.55);
+        z-index: 45;
+        font: 500 14px/1.7 ui-monospace, 'Cascadia Mono', Menlo, monospace;
+        color: var(--ink);
+        user-select: none;
+      }
+      #pause-menu[hidden] {
+        display: none;
+      }
+      .pause-panel {
+        min-width: 264px;
+        display: grid;
+        gap: 10px;
+        padding: 22px 24px 18px;
+        text-align: center;
+        background: rgba(12, 16, 23, 0.86);
+        border: 1px solid var(--stroke);
+        backdrop-filter: blur(2px);
+      }
+      .pause-panel h2 {
+        margin-bottom: 6px;
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: 0.24em;
+      }
+      .pause-panel button {
+        font: inherit;
+        letter-spacing: 0.16em;
+        color: var(--ink);
+        background: rgba(28, 36, 50, 0.72);
+        border: 1px solid var(--stroke);
+        padding: 9px 12px;
+        cursor: pointer;
+      }
+      .pause-panel button:hover,
+      .pause-panel button:focus-visible {
+        color: var(--accent);
+        border-color: rgba(111, 211, 255, 0.55);
+      }
+      .pause-panel #pause-main {
+        color: var(--ink-dim);
+      }
+      .pause-panel .warn {
+        font-size: 12px;
+        line-height: 1.6;
+        color: var(--warn);
+        max-width: 42ch;
+      }
+      .pause-panel .warn[hidden] {
+        display: none;
+      }
+
+      /* ---------------------------------------------------------------------
          HUD. Everything below sits on one full-screen, click-through layer, so
          the canvas keeps receiving the mouse.
          --------------------------------------------------------------------- */
@@ -473,7 +538,7 @@
 
     <div id="boot-veil">
       <h1>箱庭射击</h1>
-      <div class="keys">WASD 移动 · 左键 射击 · 右键 开镜 · R 换弹 · E 投掷 · Shift 疾跑 · Space 跳跃</div>
+      <div class="keys">WASD 移动 · 左键 射击 · 右键 开镜 · R 换弹 · E 投掷 · Shift 疾跑 · Space 跳跃（空中再按一次为二段跳）</div>
       <div class="keys">F3 性能面板 · F4 命中日志 · M 静音</div>
       <!-- Static text only. If the module never boots, a "click to start" promise here
            would be a lie that looks exactly like a working boot screen. See plan §5.13. -->
@@ -484,6 +549,18 @@
         <span id="audio-volume-text">70%</span>
       </div>
       <div class="warn" id="boot-warn" role="alert" hidden></div>
+    </div>
+
+    <!-- Esc. Static markup, hidden until the module shows it: the three choices are the
+         whole point, so they are not built from script text at click time. -->
+    <div id="pause-menu" hidden>
+      <div class="pause-panel" role="dialog" aria-modal="true" aria-label="已暂停">
+        <h2>已暂停</h2>
+        <button id="pause-resume" type="button">结束暂停</button>
+        <button id="pause-restart" type="button">重新开始</button>
+        <button id="pause-main" type="button">返回主界面</button>
+        <div class="warn" id="pause-warn" role="alert" hidden></div>
+      </div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

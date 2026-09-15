@@ -18,7 +18,7 @@ import type { LoopMetrics } from '../../core/loop';
 
 /** Cached handle on each HUD element, so no lookups happen per frame. */
 export interface HudElements {
-  /** The HUD layer itself. Hidden exactly when the veil is shown. */
+  /** The HUD layer itself. Hidden exactly when one of the two overlays is up. */
   readonly root: HTMLElement;
   /**
    * The opaque boot/pause overlay.
@@ -31,6 +31,16 @@ export interface HudElements {
    * still passes — see the technical plan section 5.6.7.
    */
   readonly veil: HTMLElement;
+  /**
+   * The semi-transparent pause panel Esc produces.
+   *
+   * A third full-screen layer rather than one more message on the veil, and that is a
+   * fix rather than an addition: the veil is opaque and its click means "start", so
+   * reusing it for a pause made Esc look exactly like a return to the title screen and
+   * left the player with no way to say "restart" or "main menu". `overlayVisibility` is
+   * still the single arbiter of which of the three is up.
+   */
+  readonly pause: HTMLElement;
   readonly crosshair: HTMLElement;
   readonly healthFill: HTMLElement;
   readonly healthText: HTMLElement;
@@ -49,10 +59,12 @@ export interface HudElements {
 export interface Hud {
   /** Full-fidelity update. Called once per rendered frame. */
   update(view: HudView): void;
-  /** Shows the boot/pause veil with an optional message. Hides the HUD. */
+  /** Shows the boot or results veil with its text. Hides the pause menu and the HUD. */
   showVeil(message: string, detail: string): void;
-  /** Hides the veil and reveals the HUD. The two are always opposites. */
-  hideVeil(): void;
+  /** Shows the pause menu. Hides the veil and the HUD; the frozen scene stays visible. */
+  showPause(): void;
+  /** Hides every overlay and reveals the HUD. Exactly one layer is ever visible. */
+  hideOverlays(): void;
   /** Flashes the red damage vignette. `intensity` is clamped to `[0, 1]`. */
   flashDamage(intensity?: number): void;
   /** Shows a transient centre-screen banner (kill, phase change, warning). */
@@ -61,7 +73,17 @@ export interface Hud {
 }
 
 /**
- * Visibility of the two full-screen layers, as plain data.
+ * Which full-screen layer is up, if any.
+ *
+ * The three overlays the game has are `boot` (the click-to-start affordance pointer lock
+ * requires), `paused` (the panel Esc produces) and `result` (the end of a run). A single
+ * "is the veil up" boolean cannot express them: "died, then pressed Esc" would look
+ * identical to "died again", and the click that dismisses a pause would restart the run.
+ */
+export type OverlayMode = 'boot' | 'paused' | 'result' | 'none';
+
+/**
+ * Visibility of the three full-screen layers, as plain data.
  *
  * Split out as a pure function on purpose. The bug this project actually shipped
  * was not a hard one — a veil left `hidden = false` forever — but the only thing
@@ -70,16 +92,32 @@ export interface Hud {
  * section 5.6.7). Making the contract a value that a unit test can read is what
  * stops a repaint-driven test from being the only witness.
  */
-export interface HudVisibility {
-  /** Opaque boot/pause overlay. Covers the canvas, so it must be hidden in play. */
+export interface OverlayVisibility {
+  /** Opaque boot / results veil. Covers the canvas, so it must be hidden in play. */
   readonly veilHidden: boolean;
-  /** HUD layer. Must be visible exactly while the veil is not. */
+  /** Semi-transparent pause menu. */
+  readonly pauseHidden: boolean;
+  /** HUD layer. Must be visible exactly when nothing covers the canvas. */
   readonly hudHidden: boolean;
 }
 
-/** Computes the veil/HUD visibility pair for a given state. They are opposites. */
-export function hudVisibility(veilVisible: boolean): HudVisibility {
-  return { veilHidden: !veilVisible, hudHidden: veilVisible };
+/**
+ * Computes the visibility triple for a given overlay state.
+ *
+ * "At most one, and the HUD only when there is none" is the invariant, and it is enforced
+ * here rather than at three call sites. The defect this replaces was a veil left visible for
+ * a whole session with the HUD hidden underneath: every state assertion passed and the
+ * screen was black (plan §5.6.7).
+ */
+export function overlayVisibility(mode: OverlayMode): OverlayVisibility {
+  switch (mode) {
+    case 'none':
+      return { veilHidden: true, pauseHidden: true, hudHidden: false };
+    case 'paused':
+      return { veilHidden: true, pauseHidden: false, hudHidden: true };
+    default:
+      return { veilHidden: false, pauseHidden: true, hudHidden: true };
+  }
 }
 
 /** Everything the HUD needs for one frame. */
@@ -177,6 +215,21 @@ export function createHud(elements: HudElements): Hud {
   let lastDead = false;
   let bannerTimer: number | null = null;
 
+  /**
+   * The one place `overlayVisibility` is applied to the document.
+   *
+   * Every overlay transition goes through here, so "at most one layer, and the HUD only
+   * when there is none" is a property of the code rather than of three call sites that
+   * have to agree. It is also idempotent, which is what lets the composition root call it
+   * on both the lock and the unlock side of the same gesture.
+   */
+  const applyOverlay = (mode: OverlayMode): void => {
+    const visibility = overlayVisibility(mode);
+    elements.veil.hidden = visibility.veilHidden;
+    elements.pause.hidden = visibility.pauseHidden;
+    elements.root.hidden = visibility.hudHidden;
+  };
+
   return {
     update(view) {
       // --- Crosshair: one custom property, no layout thrash -------------------
@@ -258,16 +311,16 @@ export function createHud(elements: HudElements): Hud {
     },
 
     showVeil(message, detail) {
-      const visibility = hudVisibility(true);
-      elements.veil.hidden = visibility.veilHidden;
-      elements.root.hidden = visibility.hudHidden;
+      applyOverlay('boot');
       elements.hint.innerHTML = `<strong>${message}</strong><span>${detail}</span>`;
     },
 
-    hideVeil() {
-      const visibility = hudVisibility(false);
-      elements.veil.hidden = visibility.veilHidden;
-      elements.root.hidden = visibility.hudHidden;
+    showPause() {
+      applyOverlay('paused');
+    },
+
+    hideOverlays() {
+      applyOverlay('none');
     },
 
     flashDamage(intensity = 1) {

@@ -8,7 +8,15 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { chargesEmpty, crosshairRadius, formatAmmo, formatHealth, healthTone, hudVisibility } from '#/render/hud/hud';
+import {
+  chargesEmpty,
+  crosshairRadius,
+  formatAmmo,
+  formatHealth,
+  healthTone,
+  overlayVisibility,
+  type OverlayMode,
+} from '#/render/hud/hud';
 import { CHANNEL_TOLERANCE_FRAMES, createHitLog } from '#/debug/hitlog';
 import { PLAYER, SIM, WEAPON } from '#/core/config';
 import { createWeaponState } from '#/game/player/weapon';
@@ -68,42 +76,43 @@ describe('HUD formatting', () => {
   });
 });
 
-describe('veil and HUD visibility contract', () => {
-  it('makes the veil and the HUD exact opposites', () => {
-    const veiled = hudVisibility(true);
-    expect(veiled.veilHidden).toBe(false);
-    expect(veiled.hudHidden).toBe(true);
+describe('overlay visibility contract', () => {
+  const MODES: readonly OverlayMode[] = ['boot', 'paused', 'result', 'none'];
 
-    const playing = hudVisibility(false);
-    expect(playing.veilHidden).toBe(true);
-    expect(playing.hudHidden).toBe(false);
-  });
-
-  it('never reports the two layers as visible at once', () => {
-    // The defect this replaces was a veil left visible for the entire session while
-    // the HUD was hidden underneath it: every state assertion passed and the screen
-    // was black. "Both visible" and "both hidden" are the two states that make that
-    // possible, so they are excluded by name.
-    for (const veiled of [true, false]) {
-      const visibility = hudVisibility(veiled);
-      expect(visibility.veilHidden).not.toBe(visibility.hudHidden);
+  it('shows exactly one of the three layers, and the HUD only when there is no overlay', () => {
+    // The defect this replaces was a veil left visible for the entire session while the HUD
+    // was hidden underneath it: every state assertion passed and the screen was black.
+    // "More than one visible" and "none of them" are the two states that make that possible,
+    // so they are excluded by name.
+    for (const mode of MODES) {
+      const visibility = overlayVisibility(mode);
+      const shown = [!visibility.veilHidden, !visibility.pauseHidden, !visibility.hudHidden].filter(Boolean);
+      expect(shown, `mode ${mode}`).toHaveLength(1);
     }
   });
 
-  it('hides the veil in play, which is the only state the player can act in', () => {
-    expect(hudVisibility(false).veilHidden).toBe(true);
+  it('hides the overlay layers in play, which is the only state the player can act in', () => {
+    const playing = overlayVisibility('none');
+    expect(playing.veilHidden).toBe(true);
+    expect(playing.pauseHidden).toBe(true);
+    expect(playing.hudHidden).toBe(false);
+  });
+
+  it('shows the pause panel for the paused mode, not the veil', () => {
+    // Esc used to reopen the veil, i.e. the opaque title screen: the player saw what looked
+    // like a return to the main menu, with no way to restart or to leave the run.
+    const paused = overlayVisibility('paused');
+    expect(paused.pauseHidden).toBe(false);
+    expect(paused.veilHidden).toBe(true);
+    expect(paused.hudHidden).toBe(true);
   });
 
   it('treats the results screen as one more veil, not a fourth state', () => {
-    // Phase 3 added two more reasons for the veil to be up (victory and defeat). They
-    // go through the same `showVeil` call as the boot and pause screens, which is the
-    // point: there is exactly one place that decides the two layers' visibility, and
-    // it is a pure function a test can read. A "results overlay" built as its own
-    // element is how the project's original black-screen defect would come back.
-    const results = hudVisibility(true);
-    expect(results.veilHidden).toBe(false);
-    expect(results.hudHidden).toBe(true);
-    expect(results).toEqual(hudVisibility(true));
+    // Phase 3 added two more reasons for the veil to be up (victory and defeat). They go
+    // through the same `showVeil` call as the boot screen, which is the point: there is
+    // exactly one function that decides the three layers' visibility, and a "results
+    // overlay" built as its own element is how the original black-screen defect comes back.
+    expect(overlayVisibility('result')).toEqual(overlayVisibility('boot'));
   });
 });
 

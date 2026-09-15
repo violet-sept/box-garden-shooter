@@ -27,7 +27,7 @@ import {
   spreadToScreenRadius,
   updateCamera,
 } from '#/game/camera/camera';
-import { createMovementScratch, createCollisionWorld, createPlayerState, tickPlayer } from '#/game/player/player';
+import { createMovementScratch, createCollisionWorld, createPlayerState, resetPlayerState, tickPlayer } from '#/game/player/player';
 import { createWeaponState, tickWeapon } from '#/game/player/weapon';
 import { buildLevel, decorCollisionBoxes } from '#/game/level';
 
@@ -558,5 +558,157 @@ describe('player controller on the real level', () => {
     // It cannot pass through, but it must keep making lateral progress.
     expect(player.position.z).toBeGreaterThan(0.5 - 1e-6);
     expect(Math.abs(player.position.x)).toBeGreaterThan(3);
+  });
+});
+
+/**
+ * The double jump.
+ *
+ * The controller tests above drive a whole run; this block needs the opposite — one tick at a
+ * time, because the feature is entirely about *when* the key goes down. Every assertion here
+ * is a rule the player can feel: the second jump exists, holding the key does not spend it,
+ * there is no third one, and walking off a ledge costs the takeoff jump rather than granting
+ * a free extra one.
+ */
+describe('double jump', () => {
+  const level = buildLevel(11);
+  const collision = createCollisionWorld(level);
+
+  /**
+   * Runs a jump script: `held(i)` says whether Space is down on tick `i`.
+   *
+   * Returns the highest the feet got, which is the only thing a player can observe about a
+   * jump, plus the player state for the bookkeeping assertions.
+   */
+  function jump(held: (tick: number) => boolean, options: { ticks?: number; dt?: number } = {}) {
+    const dt = options.dt ?? 1 / 60;
+    const ticks = options.ticks ?? Math.round(2 / dt);
+    const player = createPlayerState(createWeaponState(1));
+    const scratch = createMovementScratch();
+    let time = 0;
+    let peak = player.position.y;
+    /** The high-water mark of the jump counter, which is what "how many jumps did it allow"
+     *  actually asks: by the end of a two-second run the player has landed and it reads 0. */
+    let maxJumpsUsed = 0;
+    for (let i = 0; i < ticks; i += 1) {
+      tickPlayer(
+        player,
+        scratch,
+        collision,
+        {
+          move: { forward: 0, right: 0 },
+          sprint: false,
+          jump: held(i),
+          fire: false,
+          aim: false,
+          reload: false,
+          throwItem: false,
+          lookDeltaX: 0,
+          lookDeltaY: 0,
+        },
+        dt,
+        time,
+      );
+      time += dt;
+      peak = Math.max(peak, player.position.y);
+      maxJumpsUsed = Math.max(maxJumpsUsed, player.jumpsUsed);
+    }
+    return { player, peak, maxJumpsUsed };
+  }
+
+  /** Press on the given ticks and nowhere else. */
+  const pressOn = (...ticks: number[]) => (i: number): boolean => ticks.includes(i);
+
+  it('gets higher with a second jump than with one', () => {
+    // One jump from the ground: the apex is v²/2g = 7.2² / 44 ≈ 1.18 m.
+    const single = jump(pressOn(0));
+    expect(single.peak).toBeGreaterThan(1);
+    expect(single.peak).toBeLessThan(1.4);
+    expect(single.player.grounded).toBe(true);
+
+    // The second press lands at the apex of the first (v/g ≈ 0.33 s ≈ 20 ticks), which is
+    // where it buys the most height.
+    const double = jump(pressOn(0, 20));
+    expect(double.peak).toBeGreaterThan(single.peak * 1.5);
+    // Two full impulses, so roughly twice the height of one.
+    expect(double.peak).toBeCloseTo(single.peak * 2, 1);
+  });
+
+  it('does not spend the air jump while the key is held down', () => {
+    // Holding Space from the floor is one jump and stays one jump. A level-triggered air
+    // jump would fire on the tick after the takeoff and leave the player with a stunted hop.
+    // (The key being held means the ground jump re-fires on every landing, which is the
+    // behaviour it has always had — the counter is what must not climb past one.)
+    const held = jump(() => true);
+    expect(held.maxJumpsUsed).toBe(1);
+    expect(held.peak).toBeLessThan(1.4);
+  });
+
+  it('never allows a third jump', () => {
+    const double = jump(pressOn(0, 20));
+    const triple = jump(pressOn(0, 20, 40));
+    expect(triple.maxJumpsUsed).toBe(PLAYER.maxJumps);
+    expect(triple.peak).toBeCloseTo(double.peak, 5);
+  });
+
+  it('starts the count at one when the player leaves the ground without jumping', () => {
+    // Dropped from three metres: gravity takes over, so the takeoff jump is spent and only
+    // one air jump is left. "Two jumps" means two, not "one plus every fall".
+    const player = createPlayerState(createWeaponState(1));
+    const scratch = createMovementScratch();
+    const intent = (jumpHeld: boolean) => ({
+      move: { forward: 0, right: 0 },
+      sprint: false,
+      jump: jumpHeld,
+      fire: false,
+      aim: false,
+      reload: false,
+      throwItem: false,
+      lookDeltaX: 0,
+      lookDeltaY: 0,
+    });
+    player.position.y = 3;
+    player.grounded = true;
+    let time = 0;
+    for (let i = 0; i < 10; i += 1) {
+      tickPlayer(player, scratch, collision, intent(false), 1 / 60, time);
+      time += 1 / 60;
+    }
+    expect(player.grounded).toBe(false);
+    expect(player.jumpsUsed).toBe(1);
+
+    // One press works, the next one does not: the fall already cost the first jump.
+    tickPlayer(player, scratch, collision, intent(true), 1 / 60, time);
+    time += 1 / 60;
+    expect(player.jumpsUsed).toBe(2);
+    // The impulse minus the one tick of gravity that the same tick applies to it.
+    expect(player.velocity.y).toBeCloseTo(PLAYER.jumpVelocity - PLAYER.gravity / 60, 6);
+  });
+
+  it('clears the count on landing', () => {
+    const doubled = jump(pressOn(0, 20));
+    expect(doubled.player.grounded).toBe(true);
+    expect(doubled.player.jumpsUsed).toBe(0);
+  });
+
+  it('resets the count and the key history with the run', () => {
+    const player = createPlayerState(createWeaponState(1));
+    player.jumpsUsed = 2;
+    player.jumpHeldLastTick = true;
+    resetPlayerState(player);
+    expect(player.jumpsUsed).toBe(0);
+    expect(player.jumpHeldLastTick).toBe(false);
+  });
+
+  it('reaches the same height at 240 Hz as at 60 Hz', () => {
+    // The whole rule lives in the simulation, so it must not care about the tick rate. The
+    // same press pattern *in seconds* is ticks 0 and 20 at 60 Hz and ticks 0 and 79 at 240 Hz
+    // (the apex of the first jump is v/g ≈ 0.33 s in).
+    const slow = jump(pressOn(0, 20));
+    const fast = jump(pressOn(0, 79), { dt: 1 / 240, ticks: 960 });
+    // Not *identical*: the two press patterns are a third of a millisecond apart and the
+    // integrator is explicit, so a few centimetres on a 2.3 m jump is the expected spread.
+    expect(Math.abs(fast.peak - slow.peak)).toBeLessThan(0.15);
+    expect(fast.maxJumpsUsed).toBe(PLAYER.maxJumps);
   });
 });

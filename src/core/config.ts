@@ -72,10 +72,20 @@ export const PLAYER = {
   /** Vertical look clamp in degrees. */
   pitchClampDeg: 85,
 
-  /** Gravity in m/s². Only used when airborne; there is no jump impulse yet. */
+  /** Gravity in m/s². Only used while airborne; the ground jump is an impulse. */
   gravity: 22,
-  /** Upward impulse of a jump, m/s. */
+  /** Upward impulse of a jump, m/s. Used for the ground jump and for the air jump. */
   jumpVelocity: 7.2,
+  /**
+   * Jumps allowed between two ground contacts, i.e. "double jump" = 2.
+   *
+   * The air jump needs a **fresh press**: holding Space down gives exactly one ground
+   * jump and no air jump, so a player cannot spend the second jump by accident. Leaving
+   * the ground by walking off a ledge costs the takeoff jump (the counter starts at 1
+   * once gravity takes over), so "two jumps" means two jumps, not "one plus however
+   * many times you fell".
+   */
+  maxJumps: 2,
   /** Maximum step height the controller walks up without a jump, in metres. */
   stepHeight: 0.45,
   /** Surfaces within this distance below the feet count as ground. */
@@ -147,6 +157,77 @@ export const WEAPON = {
 
   /** Reload consumes one magazine from this pool; picking up ammo adds to it. */
   maxReserveAmmo: 300,
+} as const;
+
+/**
+ * The rifle the player is holding, as procedural geometry.
+ *
+ * Decision D14's sibling: the project owns no binary art (there is no `public/`), so the
+ * weapon is built from primitives in `render/models/playerWeapon.ts` — the same rule the
+ * level, the enemies and the placeholder body follow. The brief for it is a colour
+ * description (black grip, black stock, black trigger, a partly orange barrel), which is
+ * why every dimension *and* every colour lives here rather than in the builder.
+ *
+ * `anchor` is where the grip sits in the **body's own frame** (the model faces `+Z`, so
+ * `-x` is the body's right hand and `+z` is in front of it). It is a held-rifle pose
+ * tuned against the procedural stand-in that ships; the delivered `player.glb` is
+ * specified as a 1.75 m humanoid with its feet at the origin facing `+Z`, which is the
+ * same frame, so the same numbers apply. See the technical plan's phase-7 memo.
+ */
+export const WEAPON_MODEL = {
+  /**
+   * Body-frame position of the grip: the right hand, chest height, in front of the torso.
+   *
+   * `-x` for the right hand because the model faces `+Z` (right = forward × up = `-x`), and
+   * `-0.5` because the procedural stand-in that ships is a 0.98 m-wide capsule — the hand is
+   * on its surface. If the delivered `.glb` arrives with narrower shoulders, this is the one
+   * number to move; nothing else in the builder knows where the hand is.
+   */
+  anchor: { x: -0.5, y: 1.15, z: 0.32 },
+  /** Barrel pitch in degrees; positive tilts the muzzle up. */
+  pitchDeg: 0,
+
+  /** Receiver: the box the whole thing is built around, ahead of the grip. */
+  receiver: { width: 0.075, height: 0.13, length: 0.3, z: 0.15, y: 0.06 },
+  /** Pistol grip. `rakeDeg` tilts its top forward, the way a real grip leans. */
+  grip: { width: 0.065, height: 0.2, length: 0.1, z: 0.0, y: -0.1, rakeDeg: 12 },
+  /** Trigger blade, and the guard bar below it. Both black; the pair is what makes it read. */
+  trigger: { width: 0.018, height: 0.075, length: 0.022, z: 0.08, y: -0.04 },
+  guard: { width: 0.05, height: 0.016, length: 0.13, z: 0.075, y: -0.1 },
+  /** Butt stock, behind the receiver. Black. */
+  stock: { width: 0.06, height: 0.125, length: 0.24, z: -0.16, y: 0.03 },
+  /** Magazine, below the receiver. */
+  magazine: { width: 0.05, height: 0.17, length: 0.08, z: 0.16, y: -0.1 },
+  /** Handguard over the barrel's rear half. */
+  handguard: { width: 0.062, height: 0.075, length: 0.22, z: 0.32, y: 0.085 },
+  /**
+   * Barrel, in two segments along `z`: a dark one against the handguard and an **orange**
+   * one in front of it. "Part of the barrel is orange" is the brief, so the split is a
+   * configured pair of lengths rather than a colour on the whole piece.
+   */
+  barrel: {
+    radius: 0.026,
+    y: 0.1,
+    rear: { length: 0.12, z: 0.4 },
+    front: { length: 0.14, z: 0.53 },
+  },
+  /** Muzzle brake: orange, wider than the barrel, the front-most piece. */
+  muzzle: { radius: 0.034, length: 0.1, z: 0.65, y: 0.1 },
+
+  /**
+   * Palette. Black furniture, dark-steel receiver and barrel, orange barrel front + muzzle.
+   *
+   * The orange carries a little emissive so it still reads as orange under the ACES tone
+   * mapping and the level's blue-grey light, which turns a plain diffuse red-orange brown.
+   */
+  colours: {
+    furniture: 0x111317,
+    receiver: 0x30363f,
+    barrel: 0x3c434c,
+    muzzle: 0xff7a1a,
+    muzzleEmissive: 0xff5a00,
+    muzzleEmissiveIntensity: 0.35,
+  },
 } as const;
 
 /**
@@ -371,6 +452,40 @@ export const ENEMY = {
   barrageZoneLife: 0.18,
   /** Blast radius in metres, as a fraction of the Warden's height. */
   barrageRadius: 3.4,
+} as const;
+
+/**
+ * The red health bar every enemy carries above its head.
+ *
+ * Sizes are **per archetype and derived from the body**, which is the whole point of the
+ * feature: a Stalker's bar is 0.8 m wide because a Stalker is 1.1 m tall, and the Warden's
+ * is 3.0 m because the Warden is 3.4 m tall across the shoulders. One width for both would
+ * either float over the small enemy like a banner or vanish on the large one.
+ *
+ * The values are metres in world space, so the bar shrinks with distance exactly like the
+ * body it belongs to (sprites, not a screen-space overlay: a DOM bar would need a
+ * projection and a DOM write per enemy per frame, and would still not be occluded by the
+ * crates the enemy is standing behind).
+ */
+export const HEALTH_BAR = {
+  /** Bar width in metres, per archetype. */
+  width: { small: 0.8, large: 3.0 },
+  /** Bar thickness in metres. */
+  height: { small: 0.1, large: 0.26 },
+  /** Gap between the top of the body and the bar, in metres. */
+  topGap: { small: 0.3, large: 0.55 },
+  /** Red fill and the dark trough it sits in. */
+  fillColour: 0xff3b30,
+  trackColour: 0x1b1012,
+  /**
+   * Draw order between the two quads of one bar.
+   *
+   * They are coplanar, so the trough would z-fight with its own fill if depth writes were
+   * on. Both materials therefore test depth (a crate still hides the bar) but write none,
+   * and these two orders decide which of the pair paints last.
+   */
+  trackOrder: 1,
+  fillOrder: 2,
 } as const;
 
 /**

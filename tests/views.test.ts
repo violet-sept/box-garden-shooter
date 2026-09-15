@@ -21,16 +21,16 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { AnimationClip, BoxGeometry, Group, Mesh, MeshStandardMaterial, Object3D, Vector3 } from 'three';
+import { AnimationClip, BoxGeometry, Group, Mesh, MeshStandardMaterial, Object3D, Sprite, SpriteMaterial, Vector3 } from 'three';
 import { createEnemyView } from '#/render/models/enemyView';
 import { buildCharacter, createPlaceholderCharacter, type CharacterModel } from '#/render/models/CharacterLoader';
 import { createCharacterRig } from '#/render/models/characterRig';
 import { createTelegraphView } from '#/render/fx/telegraph';
-import { createHud, hudVisibility, type HudElements } from '#/render/hud/hud';
+import { createHud, overlayVisibility, type HudElements } from '#/render/hud/hud';
 import { createWorld } from '#/game/World';
 import { createPlayerState } from '#/game/player/player';
 import { createWeaponState } from '#/game/player/weapon';
-import { PLAYER } from '#/core/config';
+import { ENEMY_ARCHETYPES, HEALTH_BAR, PLAYER, WEAPON_MODEL } from '#/core/config';
 import { DEG2RAD } from '#/core/math/vec3';
 import { EventBus } from '#/core/events';
 import type { EnemyState } from '#/game/enemies/EnemyState';
@@ -251,6 +251,125 @@ describe('enemy view', () => {
     expect(meshCount(view.root)).toBe(meshes);
   });
 
+  /**
+   * The health bars.
+   *
+   * The requirement is "a red bar over every enemy, short on the small one and long on the
+   * big one, in proportion to the body" — so the assertions are the size relationship, the
+   * colour, the fill tracking the damage, and the one thing a screenshot cannot show: that
+   * a corpse does not keep a bar floating over it.
+   */
+  describe('health bars', () => {
+    /** The bar group under a body of the given kind, or `undefined`. */
+    const barFor = (view: ReturnType<typeof createEnemyView>, kind: string): Object3D | undefined =>
+      view.root.children.find((child) => child.name === `enemy:${kind}`)?.children.find((child) => child.name.endsWith(':bar'));
+
+    const spriteNamed = (bar: Object3D, name: string): Sprite => {
+      const found = bar.children.find((child) => child.name === name);
+      expect(found).toBeDefined();
+      expect((found as Sprite).isSprite).toBe(true);
+      return found as Sprite;
+    };
+
+    it('sizes each bar to the body it belongs to, and places it above that body', () => {
+      const enemies = liveEnemies();
+      const view = createEnemyView();
+      view.update(enemies, 0, 1 / 60);
+
+      for (const kind of ['small', 'large'] as const) {
+        const bar = barFor(view, kind);
+        expect(bar, kind).toBeDefined();
+        const track = spriteNamed(bar!, 'health-track');
+        const fill = spriteNamed(bar!, 'health-fill');
+        expect(track.scale.x).toBeCloseTo(HEALTH_BAR.width[kind], 6);
+        expect(fill.scale.x).toBeCloseTo(HEALTH_BAR.width[kind], 6);
+        expect(track.scale.y).toBeCloseTo(HEALTH_BAR.height[kind], 6);
+        // The bar clears the silhouette: the Warden is 3.4 m tall, the Stalker 1.1 m.
+        expect(bar!.position.y).toBeCloseTo(ENEMY_ARCHETYPES[kind].height + HEALTH_BAR.topGap[kind], 6);
+      }
+
+      // "Short on the small one, long on the big one" — the whole point of the feature.
+      const small = spriteNamed(barFor(view, 'small')!, 'health-fill');
+      const large = spriteNamed(barFor(view, 'large')!, 'health-fill');
+      expect(large.scale.x).toBeGreaterThan(small.scale.x * 3);
+    });
+
+    it('paints the fill red and gives it a dark trough to sit in', () => {
+      const view = createEnemyView();
+      view.update(liveEnemies(), 0, 1 / 60);
+      const bar = barFor(view, 'small')!;
+      const fill = spriteNamed(bar, 'health-fill').material as SpriteMaterial;
+      const track = spriteNamed(bar, 'health-track').material as SpriteMaterial;
+      expect(fill.color.getHex()).toBe(HEALTH_BAR.fillColour);
+      expect(track.color.getHex()).toBe(HEALTH_BAR.trackColour);
+      // Coplanar quads: the pair must not write depth, and the fill must be ordered on top.
+      expect(fill.depthWrite).toBe(false);
+      expect(track.depthWrite).toBe(false);
+      expect(spriteNamed(bar, 'health-fill').renderOrder).toBeGreaterThan(
+        spriteNamed(bar, 'health-track').renderOrder,
+      );
+    });
+
+    it('shortens the fill as the body takes damage, and refills it on reuse', () => {
+      const enemies = liveEnemies();
+      const stalker = enemies.find((enemy) => enemy.kind === 'small');
+      expect(stalker).toBeDefined();
+      const view = createEnemyView();
+      view.update([stalker!], 0, 1 / 60);
+      const bar = barFor(view, 'small')!;
+      const fill = spriteNamed(bar, 'health-fill');
+      const full = HEALTH_BAR.width.small;
+
+      stalker!.health = stalker!.stats.maxHealth * 0.5;
+      view.update([stalker!], 0, 1 / 60);
+      expect(fill.scale.x).toBeCloseTo(full * 0.5, 6);
+
+      stalker!.health = 0;
+      view.update([stalker!], 0, 1 / 60);
+      expect(fill.scale.x).toBeLessThan(full * 0.01);
+
+      // A pooled body handed to the next enemy must not inherit the last one's wounds.
+      stalker!.health = stalker!.stats.maxHealth;
+      view.update([stalker!], 0, 1 / 60);
+      expect(fill.scale.x).toBeCloseTo(full, 6);
+    });
+
+    it('takes the bar away with the corpse, and restores it when the slot is reused', () => {
+      const enemies = liveEnemies();
+      const stalker = enemies.find((enemy) => enemy.kind === 'small')!;
+      const view = createEnemyView();
+      view.update([stalker], 0, 1 / 60);
+      const bar = barFor(view, 'small')!;
+      expect(bar.visible).toBe(true);
+
+      // The enemy is gone from the simulation, so it is a corpse playing out its collapse.
+      view.update([], 0, 1 / 60);
+      expect(bar.visible).toBe(false);
+
+      view.update([stalker], 0, 1 / 60);
+      expect(bar.visible).toBe(true);
+    });
+
+    it('adds two sprites per body and never allocates another one', () => {
+      const enemies = liveEnemies();
+      const view = createEnemyView();
+      const countSprites = (): number => {
+        let sprites = 0;
+        view.root.traverse((object) => {
+          if ((object as Sprite).isSprite) sprites += 1;
+        });
+        return sprites;
+      };
+
+      view.update(enemies, 0, 1 / 60);
+      const built = countSprites();
+      expect(built).toBe(enemies.length * 2);
+
+      for (let i = 0; i < 60; i += 1) view.update(enemies, i / 60, 1 / 60);
+      expect(countSprites()).toBe(built);
+    });
+  });
+
   it('settles its pool at the peak simultaneous count, not the kill count', () => {
     const world = createWorld({ events: new EventBus(), seed: 11 });
     const view = createEnemyView();
@@ -376,6 +495,7 @@ function fakeHudElements(): HudElements {
   return {
     root: fakeElement(),
     veil: fakeElement(),
+    pause: fakeElement(),
     crosshair: fakeElement(),
     healthFill: fakeElement(),
     healthText: fakeElement(),
@@ -391,19 +511,27 @@ function fakeHudElements(): HudElements {
 }
 
 describe('HUD layer state', () => {
-  it('ships the veil and the HUD as opposites, in both directions', () => {
+  it('ships each overlay and the HUD as exact opposites, in both directions', () => {
     const elements = fakeHudElements();
     const hud = createHud(elements);
 
     hud.showVeil('title', 'detail');
     expect(elements.veil.hidden).toBe(false);
+    expect(elements.pause.hidden).toBe(true);
     expect(elements.root.hidden).toBe(true);
     // The bug that shipped: the veil was never hidden, so the canvas stayed covered
     // while every state assertion still read correctly.
-    expect(hudVisibility(true).veilHidden).toBe(false);
+    expect(overlayVisibility('boot').veilHidden).toBe(false);
 
-    hud.hideVeil();
+    // Esc. The pause panel is its own layer, so the opaque veil must be down while it is up.
+    hud.showPause();
+    expect(elements.pause.hidden).toBe(false);
     expect(elements.veil.hidden).toBe(true);
+    expect(elements.root.hidden).toBe(true);
+
+    hud.hideOverlays();
+    expect(elements.veil.hidden).toBe(true);
+    expect(elements.pause.hidden).toBe(true);
     expect(elements.root.hidden).toBe(false);
   });
 
@@ -569,5 +697,100 @@ describe('character rig', () => {
     expect(rig.state).toBe('idle');
     expect(rig.model.state).toBe('idle');
     expect(rig.bank).toBe(0);
+  });
+
+  /**
+   * The rifle in the player's hands.
+   *
+   * The requirement is a gun on the character's **right-hand side**, black furniture with a
+   * partly orange barrel. The sign that can be wrong invisibly is the side: the model faces
+   * `+Z` and its right hand is at `-x`, while the body is drawn with `rotation.y = yaw + π`,
+   * so a plausible-looking local offset can put the rifle on the left shoulder and look
+   * perfectly fine in any screenshot of a standing character. The assertion is therefore about
+   * the rifle's **world** position relative to the player, not about its local offset.
+   */
+  describe('held weapon', () => {
+    /** Every named mesh in the rifle, by name. */
+    const gunMesh = (rig: ReturnType<typeof createCharacterRig>, name: string): Mesh => {
+      const found = rig.weapon.root.getObjectByName(name);
+      expect(found, name).toBeDefined();
+      return found as Mesh;
+    };
+
+    const colourOf = (mesh: Mesh): number => (mesh.material as MeshStandardMaterial).color.getHex();
+
+    it('hangs the rifle beside the player’s right hand, in front of the body', () => {
+      const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+      const player = playerState({ yaw: 0 });
+      player.position.x = 3;
+      player.position.z = -7;
+      rig.sync(player, 1 / 60);
+
+      const where = rig.weapon.root.getWorldPosition(new Vector3());
+      // Yaw 0 faces -Z with the camera behind it, so the player's right hand is +X. The
+      // muzzle end is in front of the body, i.e. further along -Z.
+      expect(where.x).toBeGreaterThan(player.position.x);
+      expect(where.z).toBeLessThan(player.position.z);
+      expect(where.y).toBeGreaterThan(0.8);
+      expect(where.y).toBeLessThan(PLAYER.height);
+      // It rides the body: same parent, one write per frame, no per-frame placement here.
+      expect(rig.weapon.root.parent).toBe(rig.model.root);
+    });
+
+    it('keeps the rifle at a fixed offset from the body as the body turns', () => {
+      // The anchor's distance from the body's origin cannot depend on which way the body
+      // faces. This is the assertion that would catch a rifle bolted to the wrong axis.
+      const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+      const player = playerState({ yaw: 0 });
+      const radiusNow = (): number => {
+        const where = rig.weapon.root.getWorldPosition(new Vector3());
+        return Math.hypot(where.x - player.position.x, where.z - player.position.z);
+      };
+
+      rig.sync(player, 1 / 60);
+      const before = radiusNow();
+      expect(before).toBeGreaterThan(0.2);
+
+      // Walk to the player's left until the body has come round a quarter turn.
+      player.velocity.x = -PLAYER.walkSpeed;
+      for (let i = 0; i < 60; i += 1) rig.sync(player, 1 / 60);
+      expect(Math.abs(rig.yaw - Math.PI / 2)).toBeLessThan(0.05);
+      // Trigonometry, so the radius is only invariant to within a few ulps.
+      expect(radiusNow()).toBeCloseTo(before, 5);
+    });
+
+    it('builds black furniture with a partly orange barrel and a trigger', () => {
+      const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+      const black = WEAPON_MODEL.colours.furniture;
+      const orange = WEAPON_MODEL.colours.muzzle;
+
+      // The brief names the parts: grip, stock and trigger are black...
+      for (const part of ['grip', 'stock', 'trigger', 'trigger-guard']) {
+        expect(colourOf(gunMesh(rig, part)), part).toBe(black);
+      }
+      // ...and part of the barrel is orange, which is why the barrel is two meshes.
+      expect(colourOf(gunMesh(rig, 'barrel-front'))).toBe(orange);
+      expect(colourOf(gunMesh(rig, 'muzzle'))).toBe(orange);
+      expect(colourOf(gunMesh(rig, 'barrel-rear'))).not.toBe(orange);
+
+      // A rifle, not a pistol: the stock reaches behind the grip and the barrel forward.
+      expect(gunMesh(rig, 'stock').position.z).toBeLessThan(0);
+      expect(gunMesh(rig, 'muzzle').position.z).toBeGreaterThan(gunMesh(rig, 'grip').position.z);
+      expect(rig.weapon.length).toBeGreaterThan(0.6);
+      expect(rig.weapon.length).toBeLessThan(1.4);
+    });
+
+    it('disposes its own geometry without touching the body it was hung on', () => {
+      const model = createPlaceholderCharacter(1.75);
+      const rig = createCharacterRig(model);
+      const bodyMeshes = model.root.children.filter((child) => (child as Mesh).isMesh).length;
+      expect(bodyMeshes).toBeGreaterThan(0);
+
+      rig.dispose();
+      expect(rig.weapon.root.parent).toBeNull();
+      // The body is handed in, so it is the caller's to release — the rig must not eat it.
+      expect(model.root.children.filter((child) => (child as Mesh).isMesh).length).toBe(bodyMeshes);
+      expect(() => model.dispose()).not.toThrow();
+    });
   });
 });

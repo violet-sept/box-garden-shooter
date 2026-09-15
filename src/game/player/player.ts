@@ -62,6 +62,26 @@ export interface PlayerState {
   damageTaken: number;
   /** True once health has reached zero. */
   dead: boolean;
+
+  // --- Jump bookkeeping (double jump). See `PLAYER.maxJumps`. ----------------
+  /**
+   * Jumps spent since the last ground contact.
+   *
+   * Zero while standing, one after a takeoff (or after gravity takes over), and it may
+   * reach `PLAYER.maxJumps` in the air. Kept on the player rather than in the input layer
+   * because it is a *simulation* fact — it has to survive a hitstop, a pause and a
+   * save-free restart, and it must be identical at 60 Hz and 240 Hz.
+   */
+  jumpsUsed: number;
+  /**
+   * Whether the jump key was held on the previous tick.
+   *
+   * The air jump needs a rising edge, and the edge has to be derived somewhere. Deriving
+   * it here (rather than adding a `jumpPressed` flag to the input intent) means the
+   * controller is the only place that can answer the question, and no caller can forget to
+   * supply it — the lesson `InputState.update()` taught this project twice over.
+   */
+  jumpHeldLastTick: boolean;
 }
 
 /** The collision world the controller walks on. */
@@ -128,6 +148,8 @@ export function createPlayerState(weapon: WeaponState): PlayerState {
     lastDamageFrom: { x: 0, y: 0, z: 0 },
     damageTaken: 0,
     dead: false,
+    jumpsUsed: 0,
+    jumpHeldLastTick: false,
   };
 }
 
@@ -152,6 +174,8 @@ export function resetPlayerState(state: PlayerState): void {
   state.lastDamageFrom.z = 0;
   state.damageTaken = 0;
   state.dead = false;
+  state.jumpsUsed = 0;
+  state.jumpHeldLastTick = false;
 }
 
 /** Scratch buffers so the controller allocates nothing per tick. */
@@ -364,11 +388,32 @@ export function tickPlayer(
   state.position.x = clamp(state.position.x, -limit, limit);
   state.position.z = clamp(state.position.z, -limit, limit);
 
-  // --- 5. Jump --------------------------------------------------------------
-  if (intent.jump && state.grounded) {
+  // --- 5. Jump: one off the ground, one in the air --------------------------
+  //
+  // The ground jump is level-triggered, as it always was: holding Space hops again the
+  // moment the feet land, which is a feel the players of the earlier phases already have.
+  // The **air** jump is edge-triggered, and that is not a detail — with a level-triggered
+  // air jump a held key would spend the second jump on the very next tick, so the player
+  // would get a stunted hop instead of the jump they asked for.
+  //
+  // The rising edge comes from the previous tick's own level (`jumpHeldLastTick`) rather
+  // than from a new input flag. That keeps the whole rule inside the simulation — it is
+  // frame-rate independent, it survives hitstop, and no caller can forget to pass it.
+  if (state.grounded) state.jumpsUsed = 0;
+  const jumpHeld = intent.jump;
+  const jumpPressed = jumpHeld && !state.jumpHeldLastTick;
+  let jumped = false;
+  if (jumpHeld && state.grounded) {
     state.velocity.y = PLAYER.jumpVelocity;
     state.grounded = false;
+    state.jumpsUsed = 1;
+    jumped = true;
+  } else if (jumpPressed && !state.grounded && state.jumpsUsed < PLAYER.maxJumps) {
+    state.velocity.y = PLAYER.jumpVelocity;
+    state.jumpsUsed += 1;
+    jumped = true;
   }
+  state.jumpHeldLastTick = jumpHeld;
 
   // --- 6. Step up, then settle vertically ----------------------------------
   //
@@ -429,6 +474,14 @@ export function tickPlayer(
     state.position.y = 0;
     state.velocity.y = 0;
     state.grounded = true;
+  }
+
+  // Walking off a ledge costs the takeoff jump, so "two jumps" keeps meaning two jumps and
+  // not "one jump plus however many times you fell off something". A jump of either kind is
+  // exempt (`jumped`), otherwise the takeoff would be charged twice and the double jump
+  // would never fire.
+  if (wasGrounded && !state.grounded && !jumped) {
+    state.jumpsUsed = Math.max(state.jumpsUsed, 1);
   }
 
   state.horizontalSpeed = Math.hypot(state.velocity.x, state.velocity.z);

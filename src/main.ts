@@ -62,7 +62,8 @@ import {
 } from '@/render/models/CharacterLoader';
 import { createCharacterRig, type CharacterRig } from '@/render/models/characterRig';
 import { barrageRadius } from '@/game/enemies/largeWarden';
-import { createHud, type HudElements } from '@/render/hud/hud';
+import { createHud, type HudElements, type OverlayMode } from '@/render/hud/hud';
+import { createPauseMenu } from '@/render/hud/pauseMenu';
 import { createHitLog } from '@/debug/hitlog';
 import { createPerfScene, type PerfScene, type PerfSnapshot } from '@/debug/perfScene';
 
@@ -175,6 +176,7 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
   const hudElements: HudElements = {
     root: hudRoot,
     veil,
+    pause: requireElement('pause-menu'),
     crosshair: requireElement('crosshair'),
     healthFill: requireElement('health-fill'),
     healthText: requireElement('health-text'),
@@ -543,36 +545,43 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
     };
   }
 
-  // --- Veil state -----------------------------------------------------------
+  // --- Overlay state --------------------------------------------------------
   /**
-   * Which of the three overlays is up, if any.
+   * Which full-screen layer is up, if any.
    *
-   * The veil is one element with three meanings, and they must not be confused:
-   * `boot` is the click-to-start affordance pointer lock requires, `paused` is what
-   * Esc produces, and `result` is the end of a run. A single "is the veil up" boolean
-   * would make "died, then pressed Esc" look identical to "died again" — and would
-   * make the click that dismisses a pause restart the whole game.
+   * The union lives in `render/hud/hud.ts` next to `overlayVisibility`, which is the function
+   * that turns it into three `hidden` flags — one truth, not a mode here and a mapping there.
+   * `boot` is the click-to-start affordance pointer lock requires, `paused` is the panel Esc
+   * produces, and `result` is the end of a run. A single "is the veil up" boolean would make
+   * "died, then pressed Esc" look identical to "died again" — and would make the click that
+   * dismisses a pause restart the whole game.
    */
-  type VeilMode = 'boot' | 'paused' | 'result' | 'none';
-  let veilMode: VeilMode = 'boot';
+  let veilMode: OverlayMode = 'boot';
   /** Set when the run ends, so a lock loss cannot overwrite the results screen. */
   let runOver = false;
 
-  const veilMessageFor = (mode: VeilMode): { title: string; detail: string; cta: string } => {
+  /** The text of the two veil screens. The pause panel has its own, static, markup. */
+  const veilMessageFor = (mode: 'boot' | 'result'): { title: string; detail: string; cta: string } => {
     switch (mode) {
       case 'boot':
-        return { title: '箱庭射击', detail: '点击画面开始 · Esc 释放鼠标', cta: '点击画面开始（Esc 释放鼠标）' };
-      case 'paused':
-        return { title: '已暂停', detail: '点击画面返回游戏 · Esc 释放鼠标', cta: '点击画面继续' };
+        return { title: '箱庭射击', detail: '点击画面开始 · Esc 暂停', cta: '点击画面开始（Esc 暂停）' };
       case 'result':
         return { title: results.title, detail: results.detail, cta: '点击画面重开一局' };
-      default:
-        return { title: '', detail: '', cta: '' };
     }
   };
 
-  const showVeilFor = (mode: VeilMode): void => {
+  const showVeilFor = (mode: OverlayMode): void => {
     veilMode = mode;
+    if (mode === 'paused') {
+      // Not a veil with different words: the pause panel is its own semi-transparent layer
+      // with its own three choices, and `hud` decides which of the three layers is visible.
+      hud.showPause();
+      return;
+    }
+    if (mode === 'none') {
+      hud.hideOverlays();
+      return;
+    }
     const message = veilMessageFor(mode);
     bootCta.textContent = message.cta;
     hud.showVeil(message.title, message.detail);
@@ -604,17 +613,69 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
      * leaves the screen *completely* unchanged, which is why it is the one most likely to
      * be misreported as "the game never loaded".
      */
-    (reason) => {
-      showBootProblem(
-        `浏览器拒绝了鼠标锁定：${reason}。若本页嵌在 iframe 里，需要给 iframe 加 allow="pointer-lock"；` +
-          '否则请在新标签页里直接打开本页，然后再点一次画面。',
-      );
+    (reason) => reportLockProblem(reason),
+  );
+
+  /**
+   * Puts a refused-lock explanation where the player can actually see it.
+   *
+   * Two overlays can be the visible one when a lock is refused — the boot veil and the pause
+   * panel — and each has its own warn line. Reporting through a single `showBootProblem` call
+   * would leave the pause case writing into `#boot-warn`, which lives inside the *hidden*
+   * veil: the screen would not change at all, which is precisely the defect (plan §5.13) that
+   * the visible-warning rule exists to prevent.
+   */
+  function reportLockProblem(reason: string): void {
+    const message =
+      `浏览器拒绝了鼠标锁定：${reason}。若本页嵌在 iframe 里，需要给 iframe 加 allow="pointer-lock"；` +
+      '否则请在新标签页里直接打开本页，然后再点一次画面。';
+    if (veilMode === 'paused') pause.showProblem(message);
+    else showBootProblem(message);
+  }
+
+  /**
+   * The three pause choices, wired to the game.
+   *
+   * Each one starts with the click's own gesture where it needs one: pointer lock and the
+   * audio context are both gesture-gated, and a resumed run needs both. `重新开始` resets the
+   * world *before* asking for the lock, so the fresh run is already the one on screen behind
+   * the panel (and if the browser refuses the lock — Chrome rejects one within ~1.25 s of an
+   * Esc — the player is looking at a paused fresh run rather than at the corpse of the old
+   * one).
+   *
+   * `返回主界面` deliberately does not request the lock: it goes back to the title screen,
+   * and the click that starts the next run is the veil's own.
+   */
+  const pause = createPauseMenu(
+    {
+      root: hudElements.pause,
+      resume: requireElement('pause-resume'),
+      restart: requireElement('pause-restart'),
+      mainMenu: requireElement('pause-main'),
+      warn: requireElement('pause-warn'),
+    },
+    {
+      resume: () => {
+        mixer.unlock();
+        input.requestLock();
+      },
+      restart: () => {
+        mixer.unlock();
+        restartRun();
+        input.requestLock();
+      },
+      mainMenu: () => {
+        restartRun();
+        showVeilFor('boot');
+      },
     },
   );
 
   const hideVeilAndPlay = (): void => {
     veilMode = 'none';
-    hud.hideVeil();
+    // A refusal reported on the pause panel must not follow the player back into the run.
+    pause.clearProblem();
+    hud.hideOverlays();
     loop.setPaused(false);
   };
 
@@ -797,6 +858,8 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
       mixer.dispose();
       effects.dispose();
       hud.dispose();
+      pause.dispose();
+      character?.dispose();
       character?.model.dispose();
       enemyView.dispose();
       telegraph.dispose();

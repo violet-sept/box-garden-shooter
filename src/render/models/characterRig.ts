@@ -25,12 +25,21 @@
 
 import type { CharacterModel, CharacterState } from './CharacterLoader';
 import { createBodyPose, resetBodyPose, stepBodyPose, targetBodyYaw, type BodyPose } from './characterTurn';
+import { createPlayerWeapon, type PlayerWeapon } from './playerWeapon';
 import { PLAYER } from '../../core/config';
 import type { PlayerState } from '../../game/player/player';
 
 /** What the rig exposes for the composition root and for tests. */
 export interface CharacterRig {
   readonly model: CharacterModel;
+  /**
+   * The rifle in the body's hands.
+   *
+   * Owned by the rig because it rides the body: it is added to the model's root, so wherever
+   * the body is placed and whichever way it is turned, the weapon follows with no second
+   * write per frame. Its placement is `WEAPON_MODEL.anchor` in the body's own frame.
+   */
+  readonly weapon: PlayerWeapon;
   /** Places, turns and animates the body. `dt` is render time, in seconds. */
   sync(player: PlayerState, dt: number): void;
   /** Snaps to a facing, clears the lean and puts a dead body back on its feet. */
@@ -41,6 +50,8 @@ export interface CharacterRig {
   readonly bank: number;
   /** The state last handed to `play`, which the death hold may have refused. */
   readonly state: CharacterState | null;
+  /** Releases the weapon's geometry. The model is the caller's to dispose. */
+  dispose(): void;
 }
 
 /**
@@ -72,8 +83,14 @@ export function createCharacterRig(model: CharacterModel): CharacterRig {
    */
   let placed = false;
 
+  // The rifle is a child of the body's root: one write, and it follows the body's position,
+  // facing and lean for the rest of the run.
+  const weapon = createPlayerWeapon();
+  model.root.add(weapon.root);
+
   return {
     model,
+    weapon,
 
     sync(player, dt) {
       if (!placed) {
@@ -115,6 +132,13 @@ export function createCharacterRig(model: CharacterModel): CharacterRig {
     },
     get state() {
       return played;
+    },
+
+    dispose() {
+      // Only the weapon: the loaded model (or the placeholder) is handed in, so it stays the
+      // caller's to release. Taking it here would make the rig own something it did not build.
+      model.root.remove(weapon.root);
+      weapon.dispose();
     },
   };
 }
