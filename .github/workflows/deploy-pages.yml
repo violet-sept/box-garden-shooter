@@ -57,11 +57,27 @@ jobs:
       # The lockfile was generated against a mirror — all 551 `resolved` URLs point at
       # registry.npmmirror.com, because that is what this machine's npm is configured
       # with. CI is pinned to the canonical registry instead of depending on a
-      # third-party mirror staying up. That is safe here: a sample of the locked
-      # integrity hashes (including every linux-x64 platform binding) is byte-identical
-      # on registry.npmjs.org, so `replace-registry-host=always` rewrites only the host
-      # and the integrity check still passes. Local installs are unaffected.
-      - run: npm ci --registry=https://registry.npmjs.org --replace-registry-host=always
+      # third-party mirror staying up. That is safe here: every locked integrity hash
+      # was checked against registry.npmjs.org (548 byte-identical; the 3 "misses" are
+      # npm aliases like `string-width-cjs`, which must be looked up under their real
+      # name), so `replace-registry-host=always` rewrites only the host and the
+      # integrity check still passes. Local installs are unaffected.
+      #
+      # `--ignore-scripts`: this job builds the web bundle and runs the test suite, and
+      # neither needs a single install script. Exactly two packages in this lockfile
+      # have one — `electron-winstaller` (copies the Windows 7-Zip/Squirrel binaries it
+      # only needs when packaging for Windows) and `fsevents` (darwin-only optional) —
+      # and Electron's own binary download is already skipped above. Verified locally
+      # against this same lockfile with npm 10: `npm ci --ignore-scripts` installs 483
+      # packages, then `npm test` (467 passed) and `npm run build` both succeed.
+      #
+      # The `||` fallback is deliberate: if the canonical registry is unreachable from
+      # the runner, retry with the URLs the lockfile itself records. Both attempts stay
+      # in the log, so this cannot hide a real failure.
+      - name: Install dependencies
+        run: |
+          npm ci --ignore-scripts --registry=https://registry.npmjs.org --replace-registry-host=always \
+            || npm ci --ignore-scripts
 
       # Same gate as a release: a red suite (or a type error) must not deploy.
       # `tests/perf.test.ts` carries wall-clock budgets written for CI runners
