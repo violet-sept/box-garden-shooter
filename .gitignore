@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+dist-electron/
+release/
+*.tsbuildinfo
+
+# Local scratch
+# `.tmp-*` without a trailing slash so scratch *files* are covered too, not just
+# directories: the acceptance reports, the Electron profile directory and
+# throwaway diagnostic scripts all live under this prefix. (The 158 MB offline
+# Electron zip cache used to live here as well; it was deleted once the
+# `--config.electronDist=node_modules/electron/dist` route made it redundant.)
+.tmp-*
+*.log
+npm-debug.log*
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Game assets: source masters are large and licensed per-project.
+# Optimised derivatives under public/assets/ ARE committed; raw imports are not.
+assets-source/
+*.blend
+*.psd
+*.fbx

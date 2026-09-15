@@ -1,0 +1,38 @@
+{
+  "name": "box-garden-shooter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "3D box-garden (diorama arena) wave shooter built with Three.js; runs in the browser and as a desktop app.",
+  "author": "Box Garden Shooter",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "imports": {
+    "#/*": "./src/*"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "assets:icon": "node tools/make-icon.mjs",
+    "assets:optimize": "gltf-transform optimize public/assets/models/in --out public/assets/models/out --texture-compress webp",
+    "desktop:dev": "electron electron/main.cjs",
+    "desktop:build": "npm run build && electron-builder --config electron-builder.yml",
+    "desktop:accept": "node tools/desktop-acceptance.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@gltf-transform/cli": "^4.5.0",
+    "@types/three": "^0.186.0",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
+    "three": "^0.186.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0"
+  }
+}

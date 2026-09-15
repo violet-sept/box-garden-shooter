@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["vite/client"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+
+    // TypeScript 7 removed `baseUrl`; `paths` are now resolved relative to this
+    // file, which is why every entry needs an explicit `./` prefix.
+    //
+    // `@/*` is the alias the bundler resolves (see `vite.config.ts`). `#/*` mirrors
+    // the `imports` map in `package.json`, which is what lets the test suite run
+    // under plain Node (`node --test`) with no bundler in the loop at all.
+    "paths": {
+      "@/*": ["./src/*"],
+      "#/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "tests", "vite.config.ts", "vitest.config.mjs"]
+}

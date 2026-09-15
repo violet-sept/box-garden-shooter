@@ -1,0 +1,88 @@
+# Publish the web build to GitHub Pages.
+#
+# Why this file can be this short: the build is already a self-contained static
+# bundle — `base: './'` makes every reference relative, and there are no runtime
+# assets at all (no `public/`, no audio files, no images). So "deploy" really is
+# "upload `dist/`". This workflow deliberately does not patch the build: no
+# `--base`, no URL rewriting, no CDN, no service worker.
+#
+# That is also why the same `dist/` works unchanged at `/` (a `<user>.github.io`
+# user site), at `/<repo>/` (a project site) and behind a custom subdomain.
+#
+# Two things are configured in the repository settings rather than here:
+#   * Settings → Pages → Source must be "GitHub Actions".
+#   * A custom domain goes in Settings → Pages → Custom domain. With an Actions
+#     workflow GitHub neither creates nor reads a `CNAME` file, so do not add one
+#     (docs: "no CNAME file is created, and any existing CNAME file is ignored").
+#
+# Pages requires a *public* repository on the free plan.
+
+name: Deploy web build
+
+on:
+  push:
+    branches: [main]
+  # Manual re-deploy, e.g. after changing a Pages setting.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one midway: a half-published site is
+# worse than a site that is a commit behind.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # The web build never touches Electron. Skip its ~100 MB binary download so
+      # `npm ci` stays fast; nothing in `npm run build` imports the shell.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The floor that matters is 22.15: `tests/preload.mjs` calls
+          # `module.registerHooks`, which Node added in v22.15.0 (see the `engines`
+          # field). `22` resolves to the newest 22.x, so it always satisfies that.
+          node-version: 22
+          cache: npm
+
+      # The lockfile was generated against a mirror — all 551 `resolved` URLs point at
+      # registry.npmmirror.com, because that is what this machine's npm is configured
+      # with. CI is pinned to the canonical registry instead of depending on a
+      # third-party mirror staying up. That is safe here: a sample of the locked
+      # integrity hashes (including every linux-x64 platform binding) is byte-identical
+      # on registry.npmjs.org, so `replace-registry-host=always` rewrites only the host
+      # and the integrity check still passes. Local installs are unaffected.
+      - run: npm ci --registry=https://registry.npmjs.org --replace-registry-host=always
+
+      # Same gate as a release: a red suite (or a type error) must not deploy.
+      # `tests/perf.test.ts` carries wall-clock budgets written for CI runners
+      # (8 ms mean / 40 ms worst per tick against a 2 ms target), so a red run
+      # here is re-run, never relaxed.
+      - run: npm test
+
+      - run: npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

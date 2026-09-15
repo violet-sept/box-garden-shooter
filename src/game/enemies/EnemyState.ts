@@ -1,0 +1,199 @@
+/**
+ * Enemy state container and the shared FSM scaffolding.
+ *
+ * This is the phase-1 `Target` shape with three additions — an archetype, a state
+ * field and an attack clock. That was the plan from the start (technical plan
+ * section 3.2.5.1): the practice dummies were always the enemy store's
+ * placeholder, so this is a substitution rather than a new architecture, and the
+ * shot resolver's call surface does not move.
+ *
+ * Everything here is plain data. No meshes, no `three`, no timers. That is what
+ * lets the entire enemy simulation — steering, frames, slots, death, cleanup —
+ * run under Vitest in plain Node.
+ */
+
+import {
+  ENEMY_LARGE,
+  ENEMY_SMALL,
+  ENRAGE_COOLDOWN_SCALE,
+  ENRAGE_HEALTH_FRACTION,
+  type EnemyStats,
+  type EnemyArchetypeId,
+} from '../../core/config';
+import type { Vector3 } from '../../core/math/vec3';
+import type { TargetHitbox } from '../combat/hitboxes';
+
+/** Identifies a store entry. `dummy` is the non-combatant practice target. */
+export type EnemyKind = EnemyArchetypeId | 'dummy';
+
+/**
+ * Small enemy states.
+ *
+ * `SPAWN` is a real state rather than an instant: an enemy that appears and
+ * charges on the same tick gives the player no chance to register it, and the wave
+ * director (phase 3) will want a materialisation beat it can drive.
+ */
+export type SmallState =
+  | 'SPAWN'
+  | 'IDLE'
+  | 'CHASE'
+  | 'TELEGRAPH'
+  | 'ACTIVE'
+  | 'RECOVER'
+  | 'STAGGER'
+  | 'DEAD';
+
+/** Large enemy states. `REPOSITION` is the distance-band hold, not a chase. */
+export type LargeState =
+  | 'SPAWN'
+  | 'IDLE'
+  | 'REPOSITION'
+  | 'TELEGRAPH'
+  | 'BARRAGE'
+  | 'RECOVER'
+  | 'STAGGER'
+  | 'ENRAGE'
+  | 'DEAD';
+
+/** Any state either FSM can be in. */
+export type EnemyStateName = SmallState | LargeState;
+
+/** Live state of one enemy (or practice dummy). */
+export interface EnemyState {
+  readonly id: number;
+  readonly kind: EnemyKind;
+  readonly stats: EnemyStats;
+  /** Damage multiplier applied to weak-point hits on this body. */
+  readonly weakPointMultiplier: number;
+  /** Element 0 is always the head. Rebuilt each tick from `position`. */
+  hitboxes: TargetHitbox[];
+  /** Feet position. */
+  readonly position: Vector3;
+  /** Current velocity, m/s. Read by lead prediction and by the render layer. */
+  readonly velocity: Vector3;
+  /** Position at the start of the current tick, for render interpolation. */
+  readonly previousPosition: Vector3;
+
+  /** Current FSM state. Narrow per archetype at the point of use. */
+  fsm: EnemyStateName;
+  /** How long the FSM has been in `fsm`, in seconds. */
+  stateTime: number;
+  /** Seconds the current attack has been running, measured from the telegraph. */
+  attackElapsed: number;
+  /** Seconds until this enemy may begin another attack. */
+  attackCooldown: number;
+  /** True while this small enemy holds one of the `ATTACK_SLOTS` slots. */
+  hasAttackSlot: boolean;
+  /** True once the attack's damage has been resolved, so it lands exactly once. */
+  attackResolved: boolean;
+
+  health: number;
+  alive: boolean;
+  /** Simulation time of the last hit, for the flash effect. */
+  lastHitTime: number;
+  /** Accumulated damage, for the debug readout. */
+  totalDamageTaken: number;
+  /** Simulation time the last hit landed, used to rate-limit knockback. */
+  lastKnockbackTime: number;
+  /** Seconds of hitstun remaining. */
+  stunRemaining: number;
+  /** Time at which the enemy last decided a movement direction. */
+  lastRepathTime: number;
+
+  /** True once the large enemy has crossed its enrage threshold. */
+  enraged: boolean;
+  /** Weak-point damage accumulated since the last stagger (Warden only). */
+  weakPointDamageSinceStagger: number;
+  /**
+   * Impact points locked in at the end of a barrage telegraph.
+   *
+   * Kept on the state rather than in store-private storage because the render
+   * layer draws them: the player's only counterplay to a barrage is to read these
+   * markers and walk out of them, so they are gameplay data, not decoration.
+   */
+  impactPoints: Vector3[];
+  /**
+   * Seconds until each locked impact detonates, parallel to {@link impactPoints}.
+   *
+   * Written by the store as it schedules the barrage and decremented on the enemy's
+   * own tick, so the AI module never owns a timer and the schedule survives a
+   * stun without silently freezing.
+   */
+  blastTimers: number[];
+  /**
+   * Total fuse the current barrage was scheduled with, in seconds.
+   *
+   * Read by the presentation layer to size the ground markers' fill ramp: "how much
+   * of the fuse is left" needs the original length, and re-deriving it in the render
+   * layer from the point count and the stagger would be a second copy of the
+   * schedule's arithmetic — the kind of duplicate that silently desynchronises the
+   * warning from the damage.
+   */
+  barrageTotalFuse: number;
+
+  /** Presentation state, written by the AI and read by the view layer. */
+  readonly view: EnemyViewState;
+}
+
+/** Everything the renderer needs that is not already geometric. */
+export interface EnemyViewState {
+  /** Facing, radians. 0 is -Z, matching the player convention. */
+  yaw: number;
+  /** 0..1 blend of the telegraph glow. */
+  telegraphGlow: number;
+  /** 0..1 blend of the white hit flash. */
+  hitFlash: number;
+  /** True while the body should read as "about to strike". */
+  lunging: boolean;
+}
+
+/** Creates the mutable view-state block. */
+export function createViewState(): EnemyViewState {
+  return { yaw: 0, telegraphGlow: 0, hitFlash: 0, lunging: false };
+}
+
+/** Stats lookup for an archetype id. The one place archetype strings become stats. */
+export function statsFor(kind: EnemyKind): EnemyStats {
+  switch (kind) {
+    case 'small':
+      return ENEMY_SMALL;
+    case 'large':
+      return ENEMY_LARGE;
+    default:
+      return ENEMY_SMALL;
+  }
+}
+
+/**
+ * Attack frame for an enemy, in seconds.
+ *
+ * Read straight off the archetype stats so the numbers stay in one table: an
+ * attack window is a designer value, and a second copy of it here would be the
+ * thing that silently fails to update when the balance is retuned.
+ */
+export function attackFrameFor(stats: EnemyStats): { telegraphTime: number; activeTime: number; recoveryTime: number } {
+  return {
+    telegraphTime: stats.telegraphTime,
+    activeTime: stats.activeTime,
+    recoveryTime: stats.recoveryTime,
+  };
+}
+
+/** Cooldown scale applied to an enemy: enrage shortens it, nothing else does. */
+export function cooldownScaleFor(enemy: EnemyState): number {
+  return enemy.enraged ? ENRAGE_COOLDOWN_SCALE : 1;
+}
+
+/** True when the enemy is mid-attack and therefore not free to reposition. */
+export function isAttacking(enemy: EnemyState): boolean {
+  const state = enemy.fsm;
+  return state === 'TELEGRAPH' || state === 'ACTIVE' || state === 'BARRAGE' || state === 'RECOVER';
+}
+
+/** True when a store entry is a live combatant rather than a practice dummy. */
+export function isLiveEnemy(enemy: EnemyState): boolean {
+  return enemy.kind === 'small' || enemy.kind === 'large';
+}
+
+/** Health at which the Warden enters `ENRAGE`. */
+export const ENRAGE_HEALTH = ENEMY_LARGE.maxHealth * ENRAGE_HEALTH_FRACTION;

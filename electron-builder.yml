@@ -1,0 +1,84 @@
+# electron-builder configuration.
+#
+# Ships the Vite build output plus the two tiny shell scripts. No source, no
+# devDependencies, no CDN at runtime: the packaged app renders entirely from
+# local files, which is what the "offline, double-clickable" acceptance
+# criterion in the technical plan requires.
+#
+# Note `asar: true` — the shell reads nothing from disk at runtime except the
+# bundled `dist/index.html`, which is exactly the shape asar supports.
+
+appId: com.boxgarden.shooter
+productName: 箱庭射击
+copyright: Copyright © 2026 Box Garden Shooter
+
+directories:
+  output: release
+  buildResources: build
+
+# Only the runtime essentials. `dist/` is produced by `npm run build`.
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+  # Source maps are generated for the web build (see vite.config.ts) but are dead
+  # weight inside the package: the shell loads `dist/index.html` over `file://` from
+  # an asar, so there is nothing to debug in place, and shipping ~3.7 MB of sources
+  # for no reader is not a trade worth making. Phase-5 decision S1.
+  - '!**/*.map'
+
+# There are no native dependencies to rebuild: the app ships three.js and nothing
+# else, and `three` is pure JS. electron-builder's rebuild step forks a child
+# process to run `npm rebuild`, which a locked-down shell denies (`spawn EPERM`)
+# and which would be a no-op anyway. Turning it off is the config-level fix, not
+# a lost safety net — if a native module is ever added, flip this back on first.
+npmRebuild: false
+
+# The `main` entry has to point at the shell; package.json stays untouched so
+# the web build keeps a plain `npm run dev` story.
+extraMetadata:
+  main: electron/main.cjs
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
+  # ASCII executable name, Chinese product name.
+  #
+  # `productName` stays 箱庭射击 because that is what the installer, the Start-menu
+  # entry and the shortcut have to say. The *file* on disk is a different question:
+  # a non-ASCII main binary name breaks terminals, scripts and CI on any hop whose
+  # encoding does not round-trip, and `tools/desktop-acceptance.mjs` has to find it
+  # by name. `nsis.shortcutName` keeps what the user actually sees in Chinese, so
+  # nothing user-facing changes. Phase-5 decision S2.
+  executableName: box-garden-shooter
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: 箱庭射击
+  # Keeps the installed tree free of the uninstaller's leftover folders.
+  deleteAppDataOnUninstall: false
+
+# No code signing configured: unsigned local builds will raise SmartScreen on
+# first launch. See the technical plan, phase 5, for the EV-certificate path.
+#
+# If packaging has to avoid downloading the Electron framework, point it at the
+# copy that is already on disk. The **long** `--config.` form is required:
+#
+#   npx electron-builder --config electron-builder.yml \
+#     --config.electronDist=node_modules/electron/dist
+#
+# Measured in phase 5: the short `-c.electronDist=...` spelling that
+# electron-builder's own docs use is parsed here as `-c` plus a *config file* named
+# `.electronDist=...`, and packaging dies with
+#   ENOENT: no such file or directory, open '<cwd>\.electronDist=node_modules\...'
+# The long form loads the config and then reports
+#   "using custom unpacked Electron distribution  electronDist=node_modules/electron/dist"
+#
+# See technical plan §5.3.1 — the same locked-down environment also prevents
+# *launching* any Electron process (Chromium's IPC needs a named pipe) and makes
+# electron-builder's module collector die with `spawn EPERM`.

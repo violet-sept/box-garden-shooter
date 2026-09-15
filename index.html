@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      CSP, deny by default. Two non-obvious sources:
+        file:   the packaged desktop build loads this document over file://, where
+                a bare 'self' does not reliably match sibling files.
+        ws://*  loopback only, for the Vite dev server's HMR socket ('self' is not
+                guaranteed to match a ws: URL).
+      No 'unsafe-eval' / 'unsafe-inline' for scripts: the build contains no eval or
+      new Function, and both Vite and the built page emit script tags with a src.
+      'unsafe-inline' is needed for styles alone, since the HUD CSS lives here.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' file: data: blob:; script-src 'self' file:; style-src 'self' 'unsafe-inline'; connect-src 'self' file: data: blob: ws://localhost:* ws://127.0.0.1:*; base-uri 'none'; form-action 'none'; object-src 'none'"
+    />
+    <title>箱庭射击 · Box Garden Shooter</title>
+    <style>
+      /* ---------------------------------------------------------------------
+         Design tokens. One place to change the HUD palette, matching the rule
+         that all tuning values live in one table.
+         --------------------------------------------------------------------- */
+      :root {
+        color-scheme: dark;
+        --ink: #e7ecf5;
+        --ink-dim: #93a0b4;
+        --accent: #6fd3ff;
+        --warn: #ffcf5d;
+        --danger: #ff6152;
+        --panel: rgba(12, 16, 23, 0.72);
+        --stroke: rgba(150, 175, 210, 0.22);
+        --spread: 10px;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #0b0d12;
+        font-family: ui-monospace, 'Cascadia Mono', 'SFMono-Regular', Menlo, monospace;
+        color: var(--ink);
+      }
+
+      #app {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #app canvas {
+        display: block;
+      }
+
+      /* ---------------------------------------------------------------------
+         Boot / pause veil. Doubles as the click-to-start affordance that
+         pointer lock requires, which is why it is driven straight from the
+         lock state rather than from a separate "menu" concept.
+         --------------------------------------------------------------------- */
+      #boot-veil {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        gap: 0.9rem;
+        text-align: center;
+        font: 500 15px/1.7 ui-monospace, 'Cascadia Mono', Menlo, monospace;
+        color: var(--ink);
+        background: radial-gradient(circle at 50% 42%, #1b2233 0%, #0b0d12 72%);
+        cursor: pointer;
+        user-select: none;
+        z-index: 40;
+      }
+      #boot-veil h1 {
+        font-size: 30px;
+        letter-spacing: 0.22em;
+        font-weight: 600;
+      }
+      #boot-veil .keys {
+        opacity: 0.7;
+        font-size: 12.5px;
+        letter-spacing: 0.02em;
+      }
+      #boot-veil .cta {
+        margin-top: 0.4rem;
+        font-size: 13px;
+        color: var(--accent);
+        letter-spacing: 0.14em;
+      }
+      #boot-veil .warn {
+        margin-top: 0.6rem;
+        font-size: 12.5px;
+        color: var(--warn);
+        max-width: 46ch;
+        line-height: 1.6;
+      }
+
+      /* ---------------------------------------------------------------------
+         Audio panel.
+
+         It lives *inside the veil*, not in #hud, and that is a deliberate
+         structural choice rather than a layout one: #hud is `pointer-events:
+         none` (the canvas has to keep receiving the mouse), so a slider placed
+         there would be unclickable. The veil is where the pointer is unlocked and
+         where the player is already being asked for a gesture, which is also the
+         only moment an AudioContext may legally start.
+
+         Visible only while the veil is: the two are one element's worth of
+         visibility, so the panel can never fight the HUD for the screen.
+         --------------------------------------------------------------------- */
+      #boot-veil .audio {
+        margin-top: 1.1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.7rem;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        color: var(--ink-dim);
+        cursor: default;
+      }
+      #boot-veil .audio button {
+        font: inherit;
+        letter-spacing: 0.1em;
+        color: var(--ink);
+        background: rgba(12, 16, 23, 0.72);
+        border: 1px solid var(--stroke);
+        padding: 4px 10px;
+        cursor: pointer;
+      }
+      #boot-veil .audio button[aria-pressed='true'] {
+        color: var(--warn);
+        border-color: rgba(255, 207, 93, 0.5);
+      }
+      #boot-veil .audio input[type='range'] {
+        width: 148px;
+        accent-color: var(--accent);
+        cursor: pointer;
+      }
+      #boot-veil .audio #audio-volume-text {
+        min-width: 4.2ch;
+        text-align: right;
+        color: var(--ink);
+      }
+      #boot-veil[hidden] {
+        display: none;
+      }
+
+      /* ---------------------------------------------------------------------
+         HUD. Everything below sits on one full-screen, click-through layer, so
+         the canvas keeps receiving the mouse.
+         --------------------------------------------------------------------- */
+      #hud {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 20;
+        user-select: none;
+      }
+      #hud[hidden] {
+        display: none;
+      }
+
+      /* --- Crosshair -------------------------------------------------------
+         Drawn from one element plus a custom property: the ring's size is the
+         spread cone, the dot is the exact aim point. Four separate line
+         elements would need four position writes per frame and would jitter
+         against each other at sub-pixel sizes.
+         --------------------------------------------------------------------- */
+      #crosshair {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: calc(var(--spread) * 2);
+        height: calc(var(--spread) * 2);
+        transform: translate(-50%, -50%);
+        border: 1px solid rgba(233, 242, 255, 0.55);
+        border-radius: 50%;
+        transition: width 40ms linear, height 40ms linear;
+      }
+      #crosshair::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 3px;
+        height: 3px;
+        margin: -1.5px 0 0 -1.5px;
+        background: rgba(240, 248, 255, 0.92);
+        border-radius: 50%;
+      }
+      #crosshair::before {
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 13px;
+        height: 13px;
+        margin: -6.5px 0 0 -6.5px;
+        border: 1px solid rgba(233, 242, 255, 0.22);
+        border-radius: 50%;
+      }
+
+      /* --- Bottom-left: health + charges ---------------------------------- */
+      #vitals {
+        position: absolute;
+        left: 28px;
+        bottom: 26px;
+        width: 268px;
+        display: grid;
+        gap: 8px;
+      }
+      .bar {
+        height: 10px;
+        background: rgba(8, 11, 16, 0.75);
+        border: 1px solid var(--stroke);
+        overflow: hidden;
+      }
+      #health-fill {
+        height: 100%;
+        width: 100%;
+        background: #5ddc8a;
+        transition: width 120ms linear, background 200ms linear;
+      }
+      .row {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        color: var(--ink-dim);
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+      }
+      #health-text {
+        color: var(--ink);
+        font-size: 13px;
+      }
+      #charge-row {
+        font-size: 12px;
+        color: var(--ink-dim);
+      }
+      #charge-count {
+        color: var(--accent);
+        font-size: 15px;
+      }
+      #charge-count.empty {
+        color: var(--danger);
+      }
+
+      /* --- Bottom-right: ammunition --------------------------------------- */
+      #ammo {
+        position: absolute;
+        right: 30px;
+        bottom: 24px;
+        text-align: right;
+        display: grid;
+        gap: 2px;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+      }
+      #ammo .weapon {
+        font-size: 11px;
+        letter-spacing: 0.16em;
+        color: var(--ink-dim);
+        text-transform: uppercase;
+      }
+      #ammo .counts {
+        display: flex;
+        align-items: baseline;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #ammo-magazine {
+        font-size: 40px;
+        font-weight: 600;
+        line-height: 1;
+        letter-spacing: 0.02em;
+      }
+      #ammo-reserve {
+        font-size: 17px;
+        color: var(--ink-dim);
+      }
+      #ammo-state {
+        font-size: 12px;
+        letter-spacing: 0.1em;
+        min-height: 1.2em;
+        color: transparent;
+      }
+      #ammo-state.warn {
+        color: var(--warn);
+      }
+
+      /* --- Spread readout -------------------------------------------------- */
+      #spread-hint {
+        position: absolute;
+        left: 50%;
+        bottom: 22px;
+        transform: translateX(-50%);
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        color: var(--ink-dim);
+        opacity: 0;
+        transition: opacity 160ms linear;
+      }
+
+      /* --- Damage vignette -------------------------------------------------
+         A red edge flash on every hit. It is the only feedback that tells the
+         player *which direction* pressure is coming from once a pack is on top
+         of them, so it is deliberately a vignette (edges only) rather than a
+         full-screen wash: the centre of the screen has to stay readable.
+         --------------------------------------------------------------------- */
+      #damage-flash {
+        position: absolute;
+        inset: 0;
+        --damage: 0;
+        opacity: 0;
+        background: radial-gradient(
+          ellipse at center,
+          rgba(255, 40, 30, 0) 38%,
+          rgba(255, 40, 30, calc(0.62 * var(--damage))) 100%
+        );
+        pointer-events: none;
+      }
+      #damage-flash.hit {
+        animation: damage-flash 420ms ease-out;
+      }
+      @keyframes damage-flash {
+        from {
+          opacity: 1;
+        }
+        to {
+          opacity: 0;
+        }
+      }
+
+      /* --- Downed state ---------------------------------------------------- */
+      #hud.dead #health-fill {
+        background: var(--danger) !important;
+      }
+      #crosshair.dead {
+        opacity: 0.25;
+      }
+
+      /* --- Top-left: debug stats (F3) ------------------------------------- */
+      #stats {
+        position: absolute;
+        left: 16px;
+        top: 14px;
+        font-size: 11.5px;
+        line-height: 1.55;
+        white-space: pre;
+        color: #b9e7ff;
+        background: var(--panel);
+        border: 1px solid var(--stroke);
+        padding: 7px 10px;
+        display: none;
+      }
+      body.show-stats #stats {
+        display: block;
+      }
+
+      /* --- Top-right: hit-feedback log (F4) ------------------------------- */
+      #hitlog {
+        position: absolute;
+        right: 16px;
+        top: 14px;
+        width: 470px;
+        max-height: 44vh;
+        overflow: hidden;
+        font-size: 11px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-all;
+        color: #cfe8d4;
+        background: var(--panel);
+        border: 1px solid var(--stroke);
+        padding: 8px 10px;
+        display: none;
+      }
+      body.show-hitlog #hitlog {
+        display: block;
+      }
+
+      /* --- Damage numbers (pooled by the FX layer) ------------------------ */
+      #damage-numbers {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .dmg-number {
+        position: absolute;
+        transform: translate(-50%, -50%);
+        font-size: 17px;
+        font-weight: 600;
+        color: #fff3d0;
+        text-shadow: 0 2px 5px rgba(0, 0, 0, 0.9);
+        transition: opacity 260ms linear, transform 260ms ease-out;
+        will-change: transform, opacity;
+      }
+
+      /* --- Centre banner -------------------------------------------------- */
+      .banner {
+        position: fixed;
+        left: 50%;
+        top: 27%;
+        transform: translateX(-50%);
+        padding: 9px 20px;
+        font-size: 15px;
+        letter-spacing: 0.18em;
+        background: var(--panel);
+        border: 1px solid var(--stroke);
+        color: var(--ink);
+        z-index: 30;
+        pointer-events: none;
+        animation: banner-in 160ms ease-out;
+      }
+      .banner.warn {
+        color: var(--warn);
+        border-color: rgba(255, 207, 93, 0.4);
+      }
+      .banner.good {
+        color: #7ef0a8;
+        border-color: rgba(126, 240, 168, 0.4);
+      }
+      @keyframes banner-in {
+        from {
+          opacity: 0;
+          transform: translateX(-50%) translateY(-8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateX(-50%) translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="app"></canvas>
+
+    <div id="hud" hidden>
+      <div id="crosshair"></div>
+      <div id="damage-flash"></div>
+
+      <div id="vitals">
+        <div class="row"><span>生命</span><span id="health-text">150 / 150</span></div>
+        <div class="bar"><div id="health-fill"></div></div>
+        <div class="row" id="charge-row"><span>道具 [E]</span><span id="charge-count">3</span></div>
+      </div>
+
+      <div id="ammo">
+        <div class="weapon">AR-15 Service Rifle</div>
+        <div class="counts">
+          <span id="ammo-magazine">30</span>
+          <span id="ammo-reserve">/ 210</span>
+        </div>
+        <div id="ammo-state"></div>
+      </div>
+
+      <div id="spread-hint">扩散增大 · 松开扳机恢复</div>
+
+      <pre id="stats"></pre>
+      <pre id="hitlog"></pre>
+
+      <div id="damage-numbers"></div>
+    </div>
+
+    <div id="boot-veil">
+      <h1>箱庭射击</h1>
+      <div class="keys">WASD 移动 · 左键 射击 · 右键 开镜 · R 换弹 · E 投掷 · Shift 疾跑 · Space 跳跃</div>
+      <div class="keys">F3 性能面板 · F4 命中日志 · M 静音</div>
+      <!-- Static text only. If the module never boots, a "click to start" promise here
+           would be a lie that looks exactly like a working boot screen. See plan §5.13. -->
+      <div class="cta" id="boot-cta">正在载入…</div>
+      <div class="audio" id="audio-panel">
+        <button id="audio-mute" type="button" aria-pressed="false">静音 [M]</button>
+        <input id="audio-volume" type="range" min="0" max="100" step="1" value="70" aria-label="主音量" />
+        <span id="audio-volume-text">70%</span>
+      </div>
+      <div class="warn" id="boot-warn" role="alert" hidden></div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
