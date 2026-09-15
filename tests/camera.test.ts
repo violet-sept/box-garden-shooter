@@ -15,24 +15,36 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { CAMERA, PLAYER, WEAPON } from '#/core/config';
+import { CAMERA, PLAYER, VIEW, WEAPON } from '#/core/config';
 import { createRng } from '#/core/math/rng';
 import { aabb } from '#/core/math/intersect';
 import { DEG2RAD, dot, length, vec3 } from '#/core/math/vec3';
 import {
+  VIEW_MODES,
   createAimSolution,
   createCameraScratch,
   createCameraState,
+  nextViewMode,
+  snapCamera,
   solveAim,
   spreadToScreenRadius,
   updateCamera,
+  type ViewMode,
 } from '#/game/camera/camera';
 import { createMovementScratch, createCollisionWorld, createPlayerState, resetPlayerState, tickPlayer } from '#/game/player/player';
 import { createWeaponState, tickWeapon } from '#/game/player/weapon';
 import { buildLevel, decorCollisionBoxes } from '#/game/level';
 
-/** Builds a player + camera at a given yaw/pitch, already aimed. */
-function makeRig(yaw: number, pitch: number, ads = 0) {
+/**
+ * Builds a player + camera at a given yaw/pitch, already aimed.
+ *
+ * The view mode defaults to **third person** here, which is *not* the game's default: this block
+ * is the over-the-shoulder rig's own test, and the mode it was written against should be the one
+ * stated. The first-person rig has its own block below, and the world-level tests state the mode
+ * they drive, because "which mode does `createWorld` boot into" is a fact with one right answer
+ * (`CAMERA.defaultView`) that a test should not be able to pass by accident.
+ */
+function makeRig(yaw: number, pitch: number, ads = 0, viewMode: ViewMode = 'thirdPerson') {
   const weapon = createWeaponState(1);
   weapon.adsProgress = ads;
   weapon.aiming = ads >= 1;
@@ -40,6 +52,7 @@ function makeRig(yaw: number, pitch: number, ads = 0) {
   player.yaw = yaw;
   player.pitch = pitch;
   const camera = createCameraState();
+  camera.viewMode = viewMode;
   camera.yaw = yaw;
   camera.pitch = pitch;
   const scratch = createCameraScratch();
@@ -104,7 +117,7 @@ describe('aim solve', () => {
   it('places the camera behind the pivot by the configured boom length', () => {
     const { player, scratch, aim } = makeRig(0, 0);
     solveAim(aim, scratch, player, []);
-    // Yaw 0, pitch 0: forward is 閳妬, so the camera sits at pivot + Z * hipDistance.
+    // Yaw 0, pitch 0: forward is 闁愁厽濡? so the camera sits at pivot + Z * hipDistance.
     expect(aim.desiredPosition.z).toBeCloseTo(aim.pivot.z + CAMERA.hipDistance, 9);
     expect(aim.desiredPosition.y).toBeCloseTo(aim.pivot.y, 9);
   });
@@ -119,6 +132,156 @@ describe('aim solve', () => {
     expect(aim.pivot.x).toBeCloseTo(5 + CAMERA.pivotRight, 9);
     expect(aim.pivot.y).toBeCloseTo(3 + CAMERA.pivotUp, 9);
     expect(aim.pivot.z).toBeCloseTo(-3, 9);
+  });
+});
+
+/**
+ * The first-person rig (phase 8).
+ *
+ * `V` is a *view* switch, and the one thing it must never be is a *shot* switch: the crosshair,
+ * the tracer and the impact all come from one aim solution, so a mode is only allowed to move
+ * where the camera and the muzzle are — never where the bullet goes. Half of this block is that
+ * invariant stated twice (the direction is identical in both modes), and the other half is the
+ * geometry that makes first person first person: the camera is the eye, exactly, with no boom and
+ * no shoulder offset.
+ */
+describe('first-person view', () => {
+  it('is the mode a fresh camera state boots into', () => {
+    // The brief's requirement, asserted where it is decided.
+    expect(createCameraState().viewMode).toBe('firstPerson');
+    expect(CAMERA.defaultView).toBe('firstPerson');
+  });
+
+  it('cycles through every mode and comes back', () => {
+    // Two modes today, but the list is the authority: a third one added to `VIEW_MODES` would be
+    // reachable without touching the toggle.
+    let mode = createCameraState().viewMode;
+    const seen = new Set([mode]);
+    for (let i = 0; i < VIEW_MODES.length; i += 1) {
+      mode = nextViewMode(mode);
+      seen.add(mode);
+    }
+    expect(seen.size).toBe(VIEW_MODES.length);
+    expect(mode).toBe(createCameraState().viewMode);
+  });
+
+  it('puts the pivot at the eye, with no lateral offset and no boom', () => {
+    const { player, scratch, aim } = makeRig(0, 0, 0, 'firstPerson');
+    player.position.x = 5;
+    player.position.z = -3;
+    player.position.y = 2;
+    solveAim(aim, scratch, player, [], 'firstPerson');
+
+    expect(aim.pivot.x).toBeCloseTo(5, 9);
+    expect(aim.pivot.z).toBeCloseTo(-3, 9);
+    expect(aim.pivot.y).toBeCloseTo(2 + PLAYER.eyeHeight, 9);
+    // The camera *is* the pivot: the boom is zero, not merely short.
+    expect(aim.desiredPosition.x).toBeCloseTo(aim.pivot.x, 9);
+    expect(aim.desiredPosition.y).toBeCloseTo(aim.pivot.y, 9);
+    expect(aim.desiredPosition.z).toBeCloseTo(aim.pivot.z, 9);
+  });
+
+  it('takes the muzzle off the shoulder and onto the aim axis', () => {
+    const third = makeRig(0, 0, 0, 'thirdPerson');
+    solveAim(third.aim, third.scratch, third.player, [], 'thirdPerson');
+    // The over-the-shoulder tracer is deliberately beside the crosshair...
+    expect(third.aim.muzzle.x - third.aim.pivot.x).toBeCloseTo(CAMERA.muzzleSide, 9);
+
+    const first = makeRig(0, 0, 0, 'firstPerson');
+    solveAim(first.aim, first.scratch, first.player, [], 'firstPerson');
+    // ...and the first-person one is not: the barrel is under the crosshair, so the lateral term
+    // is zero and only the drop is left. Reusing the shoulder pair here would send every tracer on
+    // a diagonal that grows with range.
+    expect(first.aim.muzzle.x).toBeCloseTo(first.aim.pivot.x, 9);
+    expect(first.aim.muzzle.y).toBeCloseTo(first.aim.pivot.y - VIEW.muzzleDrop.firstPerson, 9);
+  });
+
+  it('fires along the same direction in both views', () => {
+    // The whole safety argument for a mid-fight toggle, stated as an assertion: the view changes
+    // where the camera and the muzzle are, and nothing else. A player who switches mid-burst must
+    // not have to re-learn where their bullets go.
+    for (const [yaw, pitch] of [[0, 0], [0.7, -0.5], [-2.4, 1.1], [3.0, 0.2]] as const) {
+      const third = makeRig(yaw, pitch, 0, 'thirdPerson');
+      solveAim(third.aim, third.scratch, third.player, [], 'thirdPerson');
+      const first = makeRig(yaw, pitch, 0, 'firstPerson');
+      solveAim(first.aim, first.scratch, first.player, [], 'firstPerson');
+
+      expect(first.aim.direction.x, `yaw ${yaw}`).toBeCloseTo(third.aim.direction.x, 12);
+      expect(first.aim.direction.y, `yaw ${yaw}`).toBeCloseTo(third.aim.direction.y, 12);
+      expect(first.aim.direction.z, `yaw ${yaw}`).toBeCloseTo(third.aim.direction.z, 12);
+      // Same FOV too: ADS is an optical change and belongs to the weapon, not to the view.
+      expect(first.aim.fovDeg).toBeCloseTo(third.aim.fovDeg, 12);
+    }
+  });
+
+  it('keeps the muzzle on the aim axis in first person at every angle', () => {
+    // The `camera.test` invariant from the top of this file, re-run in the other mode: the muzzle
+    // offset is a sum of components orthogonal to `forward`, in both.
+    for (const pitch of [-1.4, -0.4, 0, 0.6, 1.4]) {
+      const { player, scratch, aim } = makeRig(1.1, pitch, 0, 'firstPerson');
+      solveAim(aim, scratch, player, [], 'firstPerson');
+      const cp = Math.cos(pitch);
+      const forward = vec3(-Math.sin(1.1) * cp, Math.sin(pitch), -Math.cos(1.1) * cp);
+      const offsetX = aim.muzzle.x - aim.pivot.x;
+      const offsetY = aim.muzzle.y - aim.pivot.y;
+      const offsetZ = aim.muzzle.z - aim.pivot.z;
+      const offsetForward = offsetX * forward.x + offsetY * forward.y + offsetZ * forward.z;
+      expect(Math.abs(offsetForward), `pitch ${pitch}`).toBeLessThan(1e-12);
+    }
+  });
+
+  it('never pinches, however tight the geometry', () => {
+    // Third person shortens its boom against a crate; first person has no boom to shorten, so the
+    // same wall must leave the camera exactly where the eye is.
+    const { player, scratch, aim, camera } = makeRig(0, 0, 0, 'firstPerson');
+    solveAim(aim, scratch, player, [], 'firstPerson');
+    // Start the frame the way a real one does — the camera already on its solved pose. Leaving it
+    // at the origin would make this a test of the damping rate rather than of the pinch rule.
+    snapCamera(camera, aim, player);
+
+    const wall = aabb(aim.pivot.x, aim.pivot.y, aim.pivot.z + 0.6, 3, 3, 0.5);
+    solveAim(aim, scratch, player, [wall], 'firstPerson');
+    expect(aim.desiredPosition.z).toBeCloseTo(aim.pivot.z, 9);
+
+    updateCamera(camera, player, aim, 0, 0, 1 / 60, [wall]);
+    expect(camera.distance).toBeCloseTo(0, 6);
+    expect(camera.pinched).toBe(false);
+  });
+
+  it('snaps onto the eye rather than damping in from wherever the camera was', () => {
+    // The mode switch is a snap (`snapCamera`), and this is the reason it has to be: easing a
+    // camera from three metres behind the head to inside it sweeps the view through the player's
+    // own body, which reads as a glitch rather than as a transition.
+    const { player, scratch, aim, camera } = makeRig(0, 0, 0, 'firstPerson');
+    solveAim(aim, scratch, player, [], 'firstPerson');
+    camera.position.x = 40;
+    camera.position.y = 40;
+    snapCamera(camera, aim, player);
+    expect(camera.position.x).toBeCloseTo(aim.pivot.x, 9);
+    expect(camera.position.y).toBeCloseTo(aim.pivot.y, 9);
+    expect(camera.position.z).toBeCloseTo(aim.pivot.z, 9);
+  });
+
+  it('keeps the third-person numbers written once', () => {
+    // `VIEW` repeats three of `CAMERA`'s values so both modes can be read from one table. Two
+    // copies of a number that must agree is exactly the drift this project keeps catching, so the
+    // copies are pinned to each other here.
+    expect(VIEW.pivotRight.thirdPerson).toBe(CAMERA.pivotRight);
+    expect(VIEW.pivotUp.thirdPerson).toBe(CAMERA.pivotUp);
+    expect(VIEW.boomDistance.thirdPerson).toBe(CAMERA.hipDistance);
+    expect(VIEW.adsBoomDistance.thirdPerson).toBe(CAMERA.adsDistance);
+    expect(VIEW.adsPivotRight.thirdPerson).toBe(CAMERA.adsPivotRight);
+    expect(VIEW.muzzleSide.thirdPerson).toBe(CAMERA.muzzleSide);
+    expect(VIEW.muzzleDrop.thirdPerson).toBe(CAMERA.muzzleDrop);
+    // And the first-person pivot is the eye, which is the definition of the mode.
+    expect(VIEW.pivotUp.firstPerson).toBe(PLAYER.eyeHeight);
+    expect(VIEW.boomDistance.firstPerson).toBe(0);
+  });
+
+  it('converges on the eye faster than the shoulder rig converges on its boom', () => {
+    // Damping an eye is the "the world slides when I walk" defect, so the first-person rate has to
+    // be the fast one. A number, not a feeling.
+    expect(VIEW.firstPersonFollowRate).toBeGreaterThan(CAMERA.followRate);
   });
 });
 
@@ -177,7 +340,7 @@ describe('crosshair convergence', () => {
     expect(wide).toBeGreaterThan(0);
     expect(wider).toBeGreaterThan(wide);
     // Same cone, narrower FOV: the cone covers more of the screen, so the drawn
-    // radius must grow 閳?this is what makes the crosshair track the zoom.
+    // radius must grow 闁?this is what makes the crosshair track the zoom.
     expect(zoomed).toBeGreaterThan(wide);
   });
 
@@ -187,8 +350,8 @@ describe('crosshair convergence', () => {
     expect(at1800).toBeCloseTo(at900 * 2, 9);
   });
 
-  it('is a small-angle projection, so a 1鎺?cone is a sane pixel radius', () => {
-    // At 78鎺?vertical FOV over 900 px, 1鎺?should be about 1/39 of the view height.
+  it('is a small-angle projection, so a 1閹?cone is a sane pixel radius', () => {
+    // At 78閹?vertical FOV over 900 px, 1閹?should be about 1/39 of the view height.
     const radius = spreadToScreenRadius(1, PLAYER.fovHip, 900);
     const expected = (Math.tan(DEG2RAD) / Math.tan(PLAYER.fovHip * 0.5 * DEG2RAD)) * 450;
     expect(radius).toBeCloseTo(expected, 9);
@@ -283,6 +446,7 @@ describe('player controller on the real level', () => {
       aim: false,
       reload: false,
       throwItem: false,
+      toggleView: false,
       lookDeltaX: 0,
       lookDeltaY: 0,
       ...intent,
@@ -334,6 +498,7 @@ describe('player controller on the real level', () => {
       aim: false,
       reload: false,
       throwItem: false,
+      toggleView: false,
       lookDeltaX: 0,
       lookDeltaY: 0,
     };
@@ -371,6 +536,7 @@ describe('player controller on the real level', () => {
       aim: false,
       reload: false,
       throwItem: false,
+      toggleView: false,
       lookDeltaX: 0,
       lookDeltaY: 0,
     };
@@ -396,6 +562,7 @@ describe('player controller on the real level', () => {
       aim: false,
       reload: false,
       throwItem: false,
+      toggleView: false,
       // A giant upward drag in one tick.
       lookDeltaX: 0,
       lookDeltaY: -100_000,
@@ -418,7 +585,7 @@ describe('player controller on the real level', () => {
 
   it('reads its obstacles from the one authored list, minus the floor', () => {
     // `createCollisionWorld` used to re-derive its own obstacle list from `props`. That was
-    // equal to `collisionBoxes` right up until the decorative pieces became solid — at which
+    // equal to `collisionBoxes` right up until the decorative pieces became solid 鈥?at which
     // point only one of the two derivations would have known about them, and the player
     // would have kept walking through lamp posts with the collision list insisting otherwise.
     expect(collision.obstacles.length).toBe(level.collisionBoxes.length - 1);
@@ -448,6 +615,7 @@ describe('player controller on the real level', () => {
       aim: false,
       reload: false,
       throwItem: false,
+      toggleView: false,
       lookDeltaX: 0,
       lookDeltaY: 0,
     };
@@ -481,6 +649,7 @@ describe('player controller on the real level', () => {
       aim: false,
       reload: false,
       throwItem: false,
+      toggleView: false,
       lookDeltaX: 0,
       lookDeltaY: 0,
     };
@@ -513,6 +682,7 @@ describe('player controller on the real level', () => {
       aim: false,
       reload: false,
       throwItem: false,
+      toggleView: false,
       lookDeltaX: 0,
       lookDeltaY: 0,
     };
@@ -531,7 +701,7 @@ describe('player controller on the real level', () => {
     const weapon = createWeaponState(1);
     const player = createPlayerState(weapon);
     const scratch = createMovementScratch();
-    // A long wall along X at z = 0; the player runs into it at 45鎺?
+    // A long wall along X at z = 0; the player runs into it at 45閹?
     const wallWorld = {
       obstacles: [aabb(0, 1, 0, 12, 1, 0.5)],
       solids: [],
@@ -545,6 +715,7 @@ describe('player controller on the real level', () => {
       aim: false,
       reload: false,
       throwItem: false,
+      toggleView: false,
       lookDeltaX: 0,
       lookDeltaY: 0,
     };
@@ -564,7 +735,7 @@ describe('player controller on the real level', () => {
 /**
  * The double jump.
  *
- * The controller tests above drive a whole run; this block needs the opposite — one tick at a
+ * The controller tests above drive a whole run; this block needs the opposite 鈥?one tick at a
  * time, because the feature is entirely about *when* the key goes down. Every assertion here
  * is a rule the player can feel: the second jump exists, holding the key does not spend it,
  * there is no third one, and walking off a ledge costs the takeoff jump rather than granting
@@ -603,6 +774,7 @@ describe('double jump', () => {
           aim: false,
           reload: false,
           throwItem: false,
+          toggleView: false,
           lookDeltaX: 0,
           lookDeltaY: 0,
         },
@@ -620,13 +792,13 @@ describe('double jump', () => {
   const pressOn = (...ticks: number[]) => (i: number): boolean => ticks.includes(i);
 
   it('gets higher with a second jump than with one', () => {
-    // One jump from the ground: the apex is v²/2g = 7.2² / 44 ≈ 1.18 m.
+    // One jump from the ground: the apex is v虏/2g = 7.2虏 / 44 鈮?1.18 m.
     const single = jump(pressOn(0));
     expect(single.peak).toBeGreaterThan(1);
     expect(single.peak).toBeLessThan(1.4);
     expect(single.player.grounded).toBe(true);
 
-    // The second press lands at the apex of the first (v/g ≈ 0.33 s ≈ 20 ticks), which is
+    // The second press lands at the apex of the first (v/g 鈮?0.33 s 鈮?20 ticks), which is
     // where it buys the most height.
     const double = jump(pressOn(0, 20));
     expect(double.peak).toBeGreaterThan(single.peak * 1.5);
@@ -638,7 +810,7 @@ describe('double jump', () => {
     // Holding Space from the floor is one jump and stays one jump. A level-triggered air
     // jump would fire on the tick after the takeoff and leave the player with a stunted hop.
     // (The key being held means the ground jump re-fires on every landing, which is the
-    // behaviour it has always had — the counter is what must not climb past one.)
+    // behaviour it has always had 鈥?the counter is what must not climb past one.)
     const held = jump(() => true);
     expect(held.maxJumpsUsed).toBe(1);
     expect(held.peak).toBeLessThan(1.4);
@@ -664,6 +836,7 @@ describe('double jump', () => {
       aim: false,
       reload: false,
       throwItem: false,
+      toggleView: false,
       lookDeltaX: 0,
       lookDeltaY: 0,
     });
@@ -703,7 +876,7 @@ describe('double jump', () => {
   it('reaches the same height at 240 Hz as at 60 Hz', () => {
     // The whole rule lives in the simulation, so it must not care about the tick rate. The
     // same press pattern *in seconds* is ticks 0 and 20 at 60 Hz and ticks 0 and 79 at 240 Hz
-    // (the apex of the first jump is v/g ≈ 0.33 s in).
+    // (the apex of the first jump is v/g 鈮?0.33 s in).
     const slow = jump(pressOn(0, 20));
     const fast = jump(pressOn(0, 79), { dt: 1 / 240, ticks: 960 });
     // Not *identical*: the two press patterns are a third of a millisecond apart and the

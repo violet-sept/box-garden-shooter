@@ -37,6 +37,7 @@ import { PERF, PERF_SWEEP_PIXELS_PER_TICK, SIM, WEAPON } from '../core/config';
 import type { InputIntent } from '../core/input';
 import type { LoopMetrics } from '../core/loop';
 import { createRng, type Rng } from '../core/math/rng';
+import { DEG2RAD } from '../core/math/vec3';
 import type { World } from '../game/World';
 
 /** Everything the acceptance harness reports back. */
@@ -125,6 +126,9 @@ export function createPerfScene(options: PerfSceneOptions = {}): PerfScene {
     aim: false,
     reload: false,
     throwItem: false,
+    // Never toggled: the acceptance run measures one view mode, and a scene that flipped
+    // mid-measurement would compare two different frame costs under one number.
+    toggleView: false,
     // A slow, constant turn: over the measurement window the aim sweeps a full
     // circle, so every part of the crowd takes fire in turn. Derived from the tick
     // rate and the look sensitivity so the sweep takes `PERF.sweepSeconds`.
@@ -162,6 +166,11 @@ export function createPerfScene(options: PerfSceneOptions = {}): PerfScene {
       // Full magazine: 640 RPM empties 30 rounds in 2.8 s, and "and full fire rate"
       // is half of what the acceptance target names.
       player.weapon.magazine = WEAPON.magazineSize;
+      // Hold the aim on the ring rather than over it. The scene spawns bodies on the floor and
+      // the player's eye is above them, so a level sweep shoots the sky: see `PERF.sweepPitchDeg`.
+      // Written every tick like the two above, and for the same reason — the scene owns these
+      // three values for the whole window, so nothing else can drift them mid-measurement.
+      player.pitch = PERF.sweepPitchDeg * DEG2RAD;
 
       let live = countAlive(world);
       let guard = 0;

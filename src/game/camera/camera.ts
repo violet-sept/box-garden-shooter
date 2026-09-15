@@ -21,7 +21,7 @@
  *      exactly where the crosshair says.
  */
 
-import { CAMERA, PLAYER, WEAPON } from '../../core/config';
+import { CAMERA, PLAYER, VIEW, WEAPON } from '../../core/config';
 import {
   type Aabb,
   type Vector3,
@@ -35,6 +35,90 @@ import {
 } from '../../core/math/vec3';
 import { createRayHit, pointInAabb, rayAabb } from '../../core/math/intersect';
 import type { PlayerState } from '../player/player';
+
+/**
+ * Which side of the player's head the camera is on.
+ *
+ * `firstPerson` is the brief's default: the camera sits at the eye and the body is not drawn,
+ * so the crosshair is literally what the player is looking at. `thirdPerson` is the
+ * over-the-shoulder rig phases 1-7 were tuned around. `V` toggles between them.
+ */
+export type ViewMode = 'firstPerson' | 'thirdPerson';
+
+/** Every view mode, in toggle order. `V` cycles the list, so there is one list, not two. */
+export const VIEW_MODES: readonly ViewMode[] = ['firstPerson', 'thirdPerson'];
+
+/**
+ * The other mode. Written as a lookup rather than as a two-branch ternary at the call site so
+ * the toggle and the list above cannot disagree about how many modes exist.
+ */
+export function nextViewMode(mode: ViewMode): ViewMode {
+  return VIEW_MODES[(VIEW_MODES.indexOf(mode) + 1) % VIEW_MODES.length] ?? 'firstPerson';
+}
+
+/**
+ * The rig numbers for one view mode, resolved once per frame.
+ *
+ * Deliberately mutable: {@link resolveView} writes into a long-lived object per mode rather than
+ * returning a fresh literal, because this runs every frame and the phase-4 rule that a
+ * presentation `update()` allocates nothing applies to the camera as well.
+ */
+interface ViewGeometry {
+  pivotRight: number;
+  pivotUp: number;
+  boomDistance: number;
+  muzzleSide: number;
+  muzzleDrop: number;
+  followRate: number;
+}
+
+/**
+ * Resolves a mode's rig numbers, **in place**, into preallocated storage.
+ *
+ * Every value is a lookup in {@link VIEW} keyed by the mode, so "which mode is which number"
+ * is answered in exactly one place. The output object is reused across frames because this runs
+ * inside `updateCamera` — the phase-4 rule that a presentation `update()` allocates nothing
+ * applies to the camera too.
+ */
+function resolveView(out: ViewGeometry, mode: ViewMode): ViewGeometry {
+  out.pivotRight = VIEW.pivotRight[mode];
+  out.pivotUp = VIEW.pivotUp[mode];
+  out.boomDistance = VIEW.boomDistance[mode];
+  out.muzzleSide = VIEW.muzzleSide[mode];
+  out.muzzleDrop = VIEW.muzzleDrop[mode];
+  out.followRate = mode === 'firstPerson' ? VIEW.firstPersonFollowRate : CAMERA.followRate;
+  return out;
+}
+
+/** Per-mode storage. One object per mode, written in place, never reallocated. */
+const viewGeometry: Record<ViewMode, ViewGeometry> = {
+  firstPerson: { pivotRight: 0, pivotUp: 0, boomDistance: 0, muzzleSide: 0, muzzleDrop: 0, followRate: 0 },
+  thirdPerson: { pivotRight: 0, pivotUp: 0, boomDistance: 0, muzzleSide: 0, muzzleDrop: 0, followRate: 0 },
+};
+
+/**
+ * Module-level scratch for the per-mode camera target.
+ *
+ * Module-level rather than per-`CameraState` because it is read and written inside a single
+ * function call and never observed from outside; the alternative is one more field on every
+ * camera state that only `updateCamera` would ever touch.
+ */
+const cameraTargetScratch: Vector3 = { x: 0, y: 0, z: 0 };
+
+/**
+ * Where the camera should be for one mode, into `out`.
+ *
+ * Split out of {@link updateCamera} so the first-person case is not "the same damping with a
+ * zero offset bolted on". In first person the target **is** the pivot, and the damping only has to
+ * absorb the one-tick gap between the simulated pivot and the frame being drawn — a fraction of a
+ * millimetre at the first-person rate. In third person the target is the collision-solved boom
+ * position, which is where the slow rate belongs: a lagging shoulder camera is what makes running
+ * feel like it has weight, and a lagging *eye* is just the world sliding.
+ */
+function cameraTargetFor(out: Vector3, mode: ViewMode, pivot: Vector3, desired: Vector3): Vector3 {
+  copy(out, mode === 'firstPerson' ? pivot : desired);
+  return out;
+}
 
 /** Where the shot is traced from and what it is traced toward. */
 export interface AimSolution {
@@ -51,6 +135,16 @@ export interface AimSolution {
 /** Camera pose, ready to be copied onto a render camera. */
 export interface CameraState {
   readonly position: Vector3;
+  /**
+   * Which view the rig is in, and the **single authority** for it.
+   *
+   * The simulation owns it because the aim solution is derived from it and the aim solution is
+   * the simulation's: `V` flips this field through `World.toggleView()`, and the next tick's
+   * `solveAim` reads it. The render layer only ever reads `camera.viewMode` back to decide
+   * whether to draw the body. A second copy of "which view are we in" living in `main.ts` is the
+   * two-sources-of-truth failure this project has already paid for twice.
+   */
+  viewMode: ViewMode;
   /** Yaw in radians, already including recoil. */
   yaw: number;
   /** Pitch in radians, already including recoil. Doubles as the camera's `x`. */
@@ -59,7 +153,12 @@ export interface CameraState {
   roll: number;
   /** Field of view in degrees for the current ADS blend. */
   fovDeg: number;
-  /** Current distance behind the pivot, after any wall pull-in. */
+  /**
+   * Current distance behind the pivot, after any wall pull-in.
+   *
+   * Zero in first person, by construction: the eye is the pivot. Reported rather than special-
+   * cased so the debug panel's "camera pinched" reading means the same thing in both modes.
+   */
   distance: number;
   /** True when the boom was shortened by geometry. Surfaced by the debug panel. */
   pinched: boolean;
@@ -67,15 +166,16 @@ export interface CameraState {
   readonly forward: Vector3;
 }
 
-/** Creates a zeroed camera state. */
+/** Creates a zeroed camera state, in the configured default view. */
 export function createCameraState(): CameraState {
   return {
     position: { x: 0, y: 0, z: 0 },
+    viewMode: CAMERA.defaultView,
     yaw: 0,
     pitch: 0,
     roll: 0,
     fovDeg: PLAYER.fovHip,
-    distance: CAMERA.hipDistance,
+    distance: VIEW.boomDistance[CAMERA.defaultView],
     pinched: false,
     forward: { x: 0, y: 0, z: -1 },
   };
@@ -119,16 +219,27 @@ export function createCameraScratch(): CameraScratch {
  * *rendered frame* while this runs once per *simulation tick*, so at 144 FPS or
  * during a long frame the two clock domains diverge and a shot would be traced
  * along an angle the player has already moved away from.
+ *
+ * The **view mode** is read off the camera state, and it changes three numbers: where the pivot
+ * is, how far behind it the camera wants to be, and where the tracer leaves from. It does not
+ * change `forward`, so the mode is invisible to the shot's direction — which is the property
+ * that makes toggling mid-fight safe. See {@link VIEW}.
+ *
+ * The parameter **defaults to third person**, matching `characterRig.sync`: a caller that hands in
+ * a player and no mode is asking about the plain over-the-shoulder rig. `World` always passes the
+ * camera's own mode explicitly, so the game never takes this default.
  */
 export function solveAim(
   out: AimSolution,
   scratch: CameraScratch,
   player: PlayerState,
   solids: readonly Aabb[],
+  viewMode: ViewMode = 'thirdPerson',
 ): AimSolution {
   const ads = player.weapon.adsProgress;
   const yaw = player.yaw;
   const pitch = player.pitch;
+  const view = resolveView(viewGeometry[viewMode], viewMode);
 
   // The view basis. `right` must be the pitched right vector: the pivot and the
   // muzzle are offset along it, and any component that is not exactly orthogonal
@@ -136,21 +247,26 @@ export function solveAim(
   const right = rightFromYawPitch(scratch.direction, yaw, pitch);
   const up = upFromYawPitch(scratch.up, yaw, pitch);
 
-  // --- Pivot: the shoulder the camera orbits ---------------------------------
-  const pivotRight = CAMERA.pivotRight + (CAMERA.adsPivotRight - CAMERA.pivotRight) * ads;
+  // --- Pivot: the shoulder (or the eye) the camera orbits --------------------
+  const pivotRight = view.pivotRight +
+    (VIEW.adsPivotRight[viewMode] - view.pivotRight) * ads;
   scratch.pivot.x = player.position.x + right.x * pivotRight;
-  scratch.pivot.y = player.position.y + CAMERA.pivotUp;
+  scratch.pivot.y = player.position.y + view.pivotUp;
   scratch.pivot.z = player.position.z + right.z * pivotRight;
 
   // --- Desired camera position, then pull-in --------------------------------
-  const distance = CAMERA.hipDistance + (CAMERA.adsDistance - CAMERA.hipDistance) * ads;
+  const distance = view.boomDistance + (VIEW.adsBoomDistance[viewMode] - view.boomDistance) * ads;
   forwardFromYawPitch(scratch.forward, yaw, pitch);
   scratch.desired.x = scratch.pivot.x - scratch.forward.x * distance;
   scratch.desired.y = scratch.pivot.y - scratch.forward.y * distance;
   scratch.desired.z = scratch.pivot.z - scratch.forward.z * distance;
 
-  // Sphere-cast the camera out of the level by shortening the boom.
-  const allowed = clearBoom(scratch, scratch.pivot, scratch.forward, distance, solids);
+  // Sphere-cast the camera out of the level by shortening the boom. A zero-length boom cannot
+  // hit anything, and in first person the boom *is* zero, so the sweep is skipped rather than
+  // run on a degenerate ray every tick.
+  const allowed = distance > 0
+    ? clearBoom(scratch, scratch.pivot, scratch.forward, distance, solids)
+    : { safeDistance: 0 };
   const finalDistance = allowed.safeDistance;
 
   copy(out.pivot, scratch.pivot);
@@ -167,8 +283,13 @@ export function solveAim(
   // of two components that are both exactly orthogonal to `forward`, so it cannot
   // rotate the aim axis no matter how large it gets. The vertical term is
   // subtracted because `up` points toward the sky.
-  const muzzleSide = CAMERA.muzzleSide;
-  const muzzleDrop = CAMERA.muzzleDrop;
+  //
+  // Both components are per-mode: an over-the-shoulder camera has the gun visibly beside the
+  // crosshair, while a camera inside the head has it directly below. Reusing the third-person
+  // pair in first person would send every tracer on a diagonal that grows with distance — a
+  // miss the player can see but the crosshair cannot explain.
+  const muzzleSide = view.muzzleSide;
+  const muzzleDrop = view.muzzleDrop;
   out.muzzle.x = scratch.pivot.x + right.x * muzzleSide - up.x * muzzleDrop;
   out.muzzle.y = scratch.pivot.y - up.y * muzzleDrop;
   out.muzzle.z = scratch.pivot.z + right.z * muzzleSide - up.z * muzzleDrop;
@@ -257,12 +378,18 @@ function clearBoom(
 /**
  * Applies recoil, ADS and position damping to produce the final camera pose.
  *
- * Ordering: player angles → recoil offset → damped position → hard un-stick.
+ * Ordering: player angles → recoil offset → target for the mode → damped position → hard
+ * un-stick.
  *
  * Rotation is *not* damped — a lagged rotation feels like input delay, which is
  * the most damaging thing a shooter camera can do. Position is damped, and then
  * clamped again, because damping an already-collision-solved target can still
  * leave the camera inside a wall for a few frames when the player spins.
+ *
+ * **The target depends on the view mode.** Third person damps toward the collision-solved boom
+ * position; first person goes straight to the pivot, at `firstPersonFollowRate`. Damping a
+ * camera that is supposed to be an eye is the "the world slides when I walk" defect, so the
+ * first-person case is exact rather than merely fast.
  */
 export function updateCamera(
   camera: CameraState,
@@ -283,11 +410,17 @@ export function updateCamera(
   // pushing" rather than "the world is tilting".
   camera.roll = -recoilYawDeg * 0.35 * DEG2RAD;
 
-  // Exponential damping so the camera settles identically at every frame rate.
-  const factor = 1 - Math.exp(-CAMERA.followRate * dt);
-  camera.position.x += (aim.desiredPosition.x - camera.position.x) * factor;
-  camera.position.y += (aim.desiredPosition.y - camera.position.y) * factor;
-  camera.position.z += (aim.desiredPosition.z - camera.position.z) * factor;
+  const view = resolveView(viewGeometry[camera.viewMode], camera.viewMode);
+  const target = cameraTargetFor(cameraTargetScratch, camera.viewMode, aim.pivot, aim.desiredPosition);
+
+  // Exponential damping so the camera settles identically at every frame rate. At the
+  // first-person rate this converges within a couple of frames, which is the point: the camera
+  // is the eye, and the damping only exists to absorb the one-tick gap between the simulation's
+  // pivot and the frame being drawn.
+  const factor = 1 - Math.exp(-view.followRate * dt);
+  camera.position.x += (target.x - camera.position.x) * factor;
+  camera.position.y += (target.y - camera.position.y) * factor;
+  camera.position.z += (target.z - camera.position.z) * factor;
 
   // Second collision pass, on the damped result. Cheaper and more robust than
   // trying to make the damping itself collision-aware.
@@ -300,8 +433,10 @@ export function updateCamera(
     camera.position.y - aim.pivot.y,
     camera.position.z - aim.pivot.z,
   );
-  // Reported honestly so the debug panel can flag "camera pinched" as a level bug.
-  camera.pinched = camera.distance < CAMERA.hipDistance - 0.05;
+  // Reported honestly so the debug panel can flag "camera pinched" as a level bug. First person
+  // can never pinch — there is no boom to shorten — and that falls out of the per-mode distance
+  // rather than needing its own branch.
+  camera.pinched = camera.distance < view.boomDistance - 0.05;
   return camera;
 }
 
@@ -333,9 +468,17 @@ function unstickCamera(position: Vector3, solids: readonly Aabb[]): void {
   }
 }
 
-/** Snaps the camera to its ideal pose, bypassing damping. Used on spawn. */
+/**
+ * Snaps the camera to its ideal pose, bypassing damping. Used on spawn.
+ *
+ * The mode-aware target matters here too: spawning in first person and snapping to the
+ * third-person boom position would put the camera three metres behind the player's head for the
+ * first frames of every run and every restart. It is also what makes a `V` press cheap to land —
+ * the caller snaps and the mode is applied with no transition to get wrong.
+ */
 export function snapCamera(camera: CameraState, aim: AimSolution, player: PlayerState): void {
-  copy(camera.position, aim.desiredPosition);
+  const target = cameraTargetFor(cameraTargetScratch, camera.viewMode, aim.pivot, aim.desiredPosition);
+  copy(camera.position, target);
   camera.yaw = player.yaw;
   camera.pitch = player.pitch;
   camera.roll = 0;

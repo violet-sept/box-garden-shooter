@@ -27,7 +27,7 @@
  *     test and the concurrency cap are both a tick stale.
  */
 
-import { DIRECTOR, HITSTOP, ITEMS, SIM, type EnemyArchetypeId } from '../core/config';
+import { CAMERA, DIRECTOR, HITSTOP, ITEMS, SIM, type EnemyArchetypeId } from '../core/config';
 import type { EventBus, EventSink } from '../core/events';
 import type { InputIntent } from '../core/input';
 import { createRng, seedFromString, type Rng } from '../core/math/rng';
@@ -39,11 +39,13 @@ import {
   createCameraScratch,
   createCameraState,
   createAimSolution,
+  nextViewMode,
   solveAim,
   updateCamera as updateCameraRig,
   snapCamera,
   type AimSolution,
   type CameraState,
+  type ViewMode,
 } from './camera/camera';
 import {
   createCollisionWorld,
@@ -143,6 +145,19 @@ export interface World {
   tick(dt: number, intent: InputIntent): void;
   /** Recomputes the camera pose. Call once per rendered frame with a render dt. */
   updateCamera(dt: number): void;
+  /**
+   * Flips between first and third person (`V`).
+   *
+   * Lives on the world rather than in the composition root because the **aim solution** depends
+   * on it: the pivot is the eye in one mode and the shoulder in the other, and the shot is traced
+   * from the muzzle toward that pivot's forward axis. A mode that only moved the rendered camera
+   * would leave the crosshair, the tracer and the impact describing three different things.
+   *
+   * The camera is **snapped** on the switch rather than eased: interpolating between the two
+   * rigs would sweep the camera through the player's own head, which reads as a glitch. Returns
+   * the mode now in effect, so the caller can announce it without reading the state back.
+   */
+  toggleView(): ViewMode;
   /**
    * Copies the current muzzle position into `out`.
    *
@@ -295,7 +310,7 @@ export function createWorld(options: WorldOptions): World {
   let lastTickDelta = 1 / SIM.tickHz;
 
   const refreshAim = (): void => {
-    solveAim(aim, cameraScratch, player, collision.solids);
+    solveAim(aim, cameraScratch, player, collision.solids, camera.viewMode);
   };
 
   const handleWeaponEvents = (result: WeaponTickResult): void => {
@@ -651,6 +666,21 @@ export function createWorld(options: WorldOptions): World {
       updateCameraRig(camera, player, aim, pitch, yaw, dt, collision.solids);
     },
 
+    /**
+     * Flips first ↔ third person and re-solves the aim for the new rig.
+     *
+     * `refreshAim` has to happen here rather than waiting for the next tick: the pivot moved, so
+     * the muzzle and the aim point the crosshair is drawn for are stale until it runs — and the
+     * render callback reads `muzzlePosition`/`aimDirection` for the flash and the tracer *before*
+     * the next simulation step.
+     */
+    toggleView() {
+      camera.viewMode = nextViewMode(camera.viewMode);
+      refreshAim();
+      snapCamera(camera, aim, player);
+      return camera.viewMode;
+    },
+
     /** Fires immediately along the current aim. Used by tests and the debug panel. */
     fireOnce() {
       refreshAim();
@@ -711,6 +741,11 @@ export function createWorld(options: WorldOptions): World {
       stats.hitstopTicks = 0;
       stats.itemsThrown = 0;
       stats.blastHits = 0;
+      // Back to the configured default view. "The run starts in first person" is the whole
+      // contract of the toggle, and a restart is the start of a run — leaving the previous run's
+      // mode in place would make the default depend on how the last one ended. This is also the
+      // line that keeps the spawn snap below pointing at the right rig.
+      camera.viewMode = CAMERA.defaultView;
       refreshAim();
       snapCamera(camera, aim, player);
     },

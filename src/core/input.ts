@@ -11,6 +11,7 @@
  *   Mouse Right    - aim down sights (ADS)
  *   R              - reload
  *   E              - throw item
+ *   V              - toggle first / third person
  *   Shift          - sprint      Space - jump      Esc - release pointer
  */
 
@@ -40,6 +41,15 @@ export interface InputIntent {
   readonly reload: boolean;
   /** Edge-triggered: true on the tick E went down. */
   readonly throwItem: boolean;
+  /**
+   * Edge-triggered: true on the tick `V` went down (first/third person).
+   *
+   * An edge like `reload`, not a level like `aim` or `jump`: flipping a view is a discrete act,
+   * and a level flag would re-apply on every tick the key was held — one press would rewrite the
+   * camera mode sixty times a second, and whether it ended up first or third person would depend
+   * on how long the player leaned on the key. The world consumes it through `World.toggleView()`.
+   */
+  readonly toggleView: boolean;
   /** Accumulated mouse delta for this tick, in pixels. */
   readonly lookDeltaX: number;
   readonly lookDeltaY: number;
@@ -60,6 +70,14 @@ export const BINDINGS = {
   right: ['KeyD'],
   reload: ['KeyR'],
   throwItem: ['KeyE'],
+  /**
+   * First / third person toggle (phase 8).
+   *
+   * In this table rather than a `keydown` listener of its own for the reason stated above it:
+   * one owner for `preventDefault`, for the locked/unlocked question and for the "repeat does
+   * not count as a new press" rule that `handleKeyDown` already applies to every edge action.
+   */
+  toggleView: ['KeyV'],
   sprint: ['ShiftLeft', 'ShiftRight'],
   jump: ['Space'],
   stats: ['F3'],
@@ -196,6 +214,7 @@ export class InputState {
       // when a frame runs several steps.
       reload: this.pressedEdges.has('reload'),
       throwItem: this.pressedEdges.has('throwItem'),
+      toggleView: this.pressedEdges.has('toggleView'),
       // Read from the accumulator, not from a per-tick copy: the whole tick's motion
       // belongs to the tick that is about to be simulated, and `endTick` consumes it.
       lookDeltaX: this.pendingLookX,

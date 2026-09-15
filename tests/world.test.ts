@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Whole-world integration tests.
  *
  * The unit tests each pin one system. This file drives the entire simulation 鈥? * director-less but otherwise complete 鈥?through synthetic input, which is the
@@ -17,7 +17,12 @@ import type { InputIntent } from '#/core/input';
 import { PLAYER, HITSTOP, SIM, WEAPON } from '#/core/config';
 import { distanceXZ } from '#/core/math/vec3';
 
-/** A blank intent, so each test only states what it changes. */
+/**
+ * A blank intent, so each test only states what it changes.
+ *
+ * `toggleView` is never set: the view is changed through `World.toggleView()` (the same call `V`
+ * makes), not through the intent, so a test that wants a mode sets it once with {@link setView}.
+ */
 function intent(overrides: Partial<InputIntent> = {}): InputIntent {
   return {
     move: { forward: 0, right: 0 },
@@ -27,10 +32,62 @@ function intent(overrides: Partial<InputIntent> = {}): InputIntent {
     aim: false,
     reload: false,
     throwItem: false,
+    toggleView: false,
     lookDeltaX: 0,
     lookDeltaY: 0,
     ...overrides,
   };
+}
+
+/**
+ * Puts a world into a named view mode.
+ *
+ * Every test in this file was written against the over-the-shoulder rig, and its numbers — the
+ * muzzle's lateral offset, the camera's distance behind the player, whether a level shot from
+ * spawn clears a chest-height dummy — are that rig's numbers. Since phase 8 the game boots into
+ * first person, so the tests state the mode they are actually about instead of inheriting it.
+ * `createWorld`'s own default is asserted once, in the phase-8 block at the end of the file.
+ */
+function setView(world: World, mode: 'firstPerson' | 'thirdPerson'): void {
+  if (world.camera.viewMode !== mode) world.toggleView();
+  expect(world.camera.viewMode).toBe(mode);
+}
+
+/**
+ * Stands the player 17 m south of a target dummy and aims at its **body**, in any view mode.
+ *
+ * "Fire straight out of spawn and hit something" used to work by geometry rather than by intent:
+ * the near dummy sits at z = −9 with the player at z = 8, and the shoulder camera's *lowered*
+ * muzzle at y = 1.26 happened to sit on the line to a 1.1 m-tall body. Eye height is 1.6, so from
+ * the eye that same level ray passes over the dummy's head — correct first-person behaviour (you
+ * have to look at what you are shooting), but it made a test whose subject is the damage chain
+ * depend on which camera the game happened to boot into.
+ *
+ * Aiming with `pitch = atan2(eye − target)`, exactly as a player would, removes that dependence.
+ * The target point is read from the **live body's own body hitbox** rather than re-derived from
+ * the level spec: the dummy's boxes are scaled from `ENEMY_DUMMY` when the store builds it, so the
+ * spec's `bodyHeight` is not the hitbox's height, and a hand-computed aim point 8 cm high is
+ * enough to miss.
+ */
+function aimAtDummy(world: World, dummyIndex = 0): void {
+  const spec = world.level.targets[dummyIndex];
+  const target = world.enemies.targets[dummyIndex];
+  if (!spec || !target) throw new Error(`world.test: no target at index ${dummyIndex}`);
+  const body = target.hitboxes.find((box) => box.zone === 'body');
+  if (!body) throw new Error('world.test: the dummy has no body hitbox');
+
+  const distance = 17;
+  const eye = world.player.position.y + PLAYER.eyeHeight;
+  world.player.position.x = spec.base.x;
+  world.player.position.z = spec.base.z + distance;
+  world.player.position.y = 0;
+  // Yaw 0 faces −Z, and the dummy is straight down −Z from here, so only pitch has to move.
+  world.player.yaw = 0;
+  // Negative because **positive pitch looks up** in this simulation (`player.ts`), so looking
+  // down at something below eye level is a negative angle. Getting this the wrong way round aims
+  // the shot over the dummy's head by 2.5 m at 17 m, which is exactly the kind of silent miss that
+  // made the old version of this test depend on which camera the game booted into.
+  world.player.pitch = -Math.atan2(eye - body.center.y, distance);
 }
 
 /** Runs `seconds` of simulation at the fixed tick rate. */
@@ -134,12 +191,23 @@ describe('shooting through the real world', () => {
 
   it('damages the dummy it is aimed at, straight out of spawn', () => {
     const world = makeWorld();
-    // Spawn faces 鈭抁 with a dummy at x = 0, z = 鈭? and clear line of sight.
+    aimAtDummy(world);
     run(world, 1, intent({ fire: true }));
     expect(world.stats.shotsFired).toBeGreaterThan(0);
     expect(world.stats.damageDealt).toBeGreaterThan(0);
     const damaged = world.enemies.targets.filter((target) => target.totalDamageTaken > 0);
     expect(damaged.length).toBeGreaterThan(0);
+  });
+
+  it('damages the dummy it is aimed at in first person too', () => {
+    // The same chain, in the view the game actually boots into. Kept as its own case rather than
+    // as a loop over modes: a mode-dependent *shooting* failure is the one thing this feature must
+    // never have, so it gets its own red light.
+    const world = makeWorld();
+    setView(world, 'firstPerson');
+    aimAtDummy(world);
+    run(world, 1, intent({ fire: true }));
+    expect(world.stats.damageDealt).toBeGreaterThan(0);
   });
 
   it('kills a practice dummy outright when enough rounds land', () => {
@@ -182,6 +250,9 @@ describe('shooting through the real world', () => {
 
   it('empties the magazine, then reloads itself from reserve', () => {
     const world = makeWorld();
+    // Aimed at a dummy, so the run has impact hitstop and the reload path is exercised with the
+    // rest of the chain live rather than in a vacuum.
+    aimAtDummy(world);
     // One magazine takes 2.8 s at 640 RPM, plus 1.7 s for the empty reload.
     run(world, 5, intent({ fire: true }));
     expect(world.stats.shotsFired).toBeGreaterThanOrEqual(WEAPON.magazineSize);
@@ -228,8 +299,9 @@ describe('aim and recoil', () => {
     expect(world.player.weapon.spreadDeg).toBeCloseTo(WEAPON.spreadAdsDeg, 3);
   });
 
-  it('keeps the muzzle in front of the camera so shots are never born inside geometry', () => {
+  it('keeps the third-person camera behind the player and the muzzle in front of it', () => {
     const world = makeWorld();
+    setView(world, 'thirdPerson');
     for (const look of [0, 60, -120, 200]) {
       run(world, 0.4, intent({ lookDeltaX: look }));
       const toPlayer = distanceXZ(world.camera.position, world.player.position);
@@ -237,6 +309,46 @@ describe('aim and recoil', () => {
       // which is the invariant that stops a shot from starting inside a wall.
       expect(toPlayer).toBeGreaterThan(0.5);
       expect(toPlayer).toBeLessThan(6);
+    }
+  });
+
+  it('puts the first-person camera at the eye, with the muzzle ahead of it', () => {
+    // The first-person half of the same invariant, and a different statement: there is no boom to
+    // keep clear of geometry, so what has to hold is that the camera *is* the eye (no lateral or
+    // backward offset at all) and that the tracer still leaves from in front of it.
+    const world = makeWorld();
+    setView(world, 'firstPerson');
+    for (const look of [0, 60, -120, 200]) {
+      run(world, 0.4, intent({ lookDeltaX: look }));
+      world.updateCamera(1 / 60);
+
+      expect(distanceXZ(world.camera.position, world.player.position)).toBeCloseTo(0, 6);
+      expect(world.camera.position.y).toBeCloseTo(world.player.position.y + PLAYER.eyeHeight, 6);
+
+      const muzzle = { x: 0, y: 0, z: 0 };
+      world.muzzlePosition(muzzle);
+      const forward = { x: 0, y: 0, z: 0 };
+      world.aimDirection(forward);
+
+      // The tracer leaves from just under the eye, not from the eye itself — that small drop is
+      // what keeps a tracer from reading as a beam out of the middle of the screen.
+      expect(muzzle.y).toBeLessThan(world.camera.position.y);
+      const fromEye = Math.hypot(
+        muzzle.x - world.camera.position.x,
+        muzzle.y - world.camera.position.y,
+        muzzle.z - world.camera.position.z,
+      );
+      expect(fromEye).toBeGreaterThan(0);
+      expect(fromEye).toBeLessThan(1);
+
+      // And it is **on** the aim axis: the offset is a vector sum of two components orthogonal to
+      // `forward`, so moving from the eye to the muzzle cannot change where the shot is pointed.
+      // This is the property that makes the whole convergence chain work in either view.
+      const along =
+        (muzzle.x - world.camera.position.x) * forward.x +
+        (muzzle.y - world.camera.position.y) * forward.y +
+        (muzzle.z - world.camera.position.z) * forward.z;
+      expect(Math.abs(along)).toBeLessThan(1e-9);
     }
   });
 });

@@ -141,10 +141,17 @@ export function createPlayerWeapon(): PlayerWeapon {
   }, orange);
   addTube('muzzle', WEAPON_MODEL.muzzle.radius, WEAPON_MODEL.muzzle.length, WEAPON_MODEL.muzzle, orange);
 
-  // The whole gun leans as one piece. Pitching the group rather than every mesh keeps the
-  // barrel and the stock on the same axis.
+  /**
+   * The whole gun leans as one piece. Pitching the group rather than every mesh keeps the barrel
+   * and the stock on the same axis.
+   *
+   * Only the *built-in* lean lives here. The **anchor is not applied by this function**: since
+   * phase 8 the rifle has two homes (the body's hands and the camera's viewmodel pose), and a
+   * builder that also positioned itself would be a second, silently stale answer to "where is the
+   * gun". `characterRig.ts` owns both placements; `WEAPON_MODEL.anchor` and
+   * `VIEW.firstPersonWeapon` are the numbers it applies.
+   */
   root.rotation.x = WEAPON_MODEL.pitchDeg * DEG2RAD;
-  root.position.set(WEAPON_MODEL.anchor.x, WEAPON_MODEL.anchor.y, WEAPON_MODEL.anchor.z);
 
   for (const object of root.children) {
     const mesh = object as Mesh;

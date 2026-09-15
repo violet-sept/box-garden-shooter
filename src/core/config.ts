@@ -244,6 +244,15 @@ export const CAMERA = {
   pivotRight: 0.42,
   pivotUp: 1.42,
   /**
+   * Which view the run starts in.
+   *
+   * First person, as the brief for the toggle asks: "the player's own eyes by default". It is a
+   * field on {@link VIEW} rather than a literal in `camera.ts` because "which mode is the
+   * default" is exactly the sort of thing a designer changes, and `createCameraState` is the
+   * only reader.
+   */
+  defaultView: 'firstPerson',
+  /**
    * Hip-fire distance behind the pivot. Also the ADS distance: in a shoulder
    * camera, aiming is a lateral offset change plus an FOV change, not a dolly.
    * Keeping the distance fixed means the character never occludes the target.
@@ -268,6 +277,95 @@ export const CAMERA = {
    */
   muzzleSide: 0.26,
   muzzleDrop: 0.16,
+} as const;
+
+/**
+ * First-person / third-person view, toggled with `V` (phase 8).
+ *
+ * ## Why both modes are expressed as offsets from the *same* shoulder pivot
+ *
+ * The rig's aim chain is built on one idea: the pivot is the point the crosshair is
+ * projected from, so the shot is traced from the muzzle *toward* the pivot's forward axis and
+ * the crosshair cannot lie (see `game/camera/camera.ts`). A view mode is therefore expressed
+ * as "how far the eye/pivot sits from the player origin and how far the camera sits **behind**
+ * that pivot" — never as a camera that has been moved to a different authority. First person
+ * simply puts the pivot at eye height and the boom at zero; third person keeps the over-the-
+ * shoulder rig that phases 1-7 tuned. Nothing about the shot direction changes with the mode.
+ *
+ * ## Why the muzzle offset is per-mode
+ *
+ * This is the one part a screenshot cannot check and a unit test can: with an
+ * over-the-shoulder camera the tracer leaves from *beside and below* the crosshair
+ * (`muzzleSide` / `muzzleDrop` in {@link CAMERA}), because that is where the gun visibly is.
+ * In first person the gun is under the crosshair, so the same sideways offset would send every
+ * tracer on a visible diagonal that grows with distance. Both pairs are on the aim axis, which
+ * is why neither can rotate the shot.
+ */
+export const VIEW = {
+  /**
+   * Pivot offsets per mode: lateral, then vertical, from the player origin.
+   *
+   * Third person is {@link CAMERA.pivotRight} / {@link CAMERA.pivotUp} repeated here so both
+   * modes can be read from one place; `tests/camera.test.ts` pins that they stay equal, because
+   * two copies of a number that must agree is exactly the drift this project keeps catching.
+   */
+  pivotRight: { firstPerson: 0, thirdPerson: CAMERA.pivotRight },
+  pivotUp: { firstPerson: PLAYER.eyeHeight, thirdPerson: CAMERA.pivotUp },
+
+  /**
+   * Distance the camera sits **behind** the pivot.
+   *
+   * Zero in first person: the camera *is* the eye. The first-person value is deliberately not
+   * negative ("slightly ahead of the eyes", as a real viewmodel rig would do) because the near
+   * plane is 0.1 m and the player's own capsule is not rendered — so there is nothing between
+   * the eye and the world to hide from.
+   */
+  boomDistance: { firstPerson: 0, thirdPerson: CAMERA.hipDistance },
+  /** ADS boom distance, per mode. Aiming in a shoulder rig is a lateral shift, not a dolly. */
+  adsBoomDistance: { firstPerson: 0, thirdPerson: CAMERA.adsDistance },
+  /** ADS pivot offset, per mode. First person has no offset to collapse. */
+  adsPivotRight: { firstPerson: 0, thirdPerson: CAMERA.adsPivotRight },
+
+  /**
+   * Tracer origin per mode: sideways and down, in the view basis, in metres.
+   *
+   * Third person is {@link CAMERA.muzzleSide} / {@link CAMERA.muzzleDrop}; first person is the
+   * same *down* drop with no sideways component, because there the barrel is directly under the
+   * crosshair. See this table's header for why the pair is per-mode at all.
+   */
+  muzzleSide: { firstPerson: 0, thirdPerson: CAMERA.muzzleSide },
+  muzzleDrop: { firstPerson: CAMERA.muzzleDrop, thirdPerson: CAMERA.muzzleDrop },
+
+  /**
+   * First-person boom convergence rate, e-folds per second.
+   *
+   * Much faster than {@link CAMERA.followRate} on purpose. Third person damps position because a
+   * lagging shoulder camera softens the feel of running; in first person the camera **is** the
+   * eye, and any lag at all reads as the world sliding — the single most nausea-inducing thing a
+   * first-person camera can do.
+   */
+  firstPersonFollowRate: 45,
+
+  /**
+   * Where the rifle hangs when the camera is inside the player's head.
+   *
+   * In the **camera's own frame** (`-z` forward, `+x` right, `+y` up), unlike
+   * `WEAPON_MODEL.anchor`, which is in the body's. The numbers put the grip below and to the
+   * right of the eye line with the barrel climbing toward the crosshair, which is the standard
+   * viewmodel pose; the stock ends ~0.3 m behind the grip and is what the `z` offset keeps out of
+   * the 0.1 m near plane.
+   */
+  firstPersonWeapon: { x: 0.24, y: -0.24, z: -0.44, pitchDeg: 1.5, yawDeg: 0 },
+
+  /**
+   * How far the viewmodel slides forward along the view axis at full ADS, in metres.
+   *
+   * A single number rather than a second anchor: raising the sights is a translation along the
+   * aim axis, and duplicating the whole offset table to express one move is how two poses drift
+   * apart. **Third person ignores it** — there the gun stays in the body's hands and ADS is the
+   * shoulder collapse the camera already does.
+   */
+  firstPersonWeaponAdsForward: 0.18,
 } as const;
 
 /** Statistics shared by every enemy archetype. */
@@ -924,6 +1022,21 @@ export const PERF = {
   sweepSeconds: 8,
   /** Fixed seed, so two runs of the scene are the same run. */
   seed: 0x5eed1e,
+  /**
+   * Downward pitch the scene's aim holds, in degrees.
+   *
+   * Derived so the sweep crosses the **bodies it spawns** rather than the sky above them. The ring
+   * sits on the floor and a Stalker is 1.1 m tall, while the player's eye is at `PLAYER.eyeHeight`
+   * — so a level aim looks straight over the crowd and the scene stops exercising the damage path
+   * at all. That is exactly what phase 8's first-person default exposed: the rig bodies went from
+   * taking fire on every sweep to almost never being hit, because the old shoulder rig's pivot was
+   * 0.18 m lower and grazed their heads instead of clearing them.
+   *
+   * Derived rather than typed in: `atan` of the drop to a body's mid-height over the ring radius.
+   * Hard-coding a degree value here would silently stop matching the ring the moment either number
+   * moved, which is the "knob that looks adjustable and changes nothing" rule in reverse.
+   */
+  sweepPitchDeg: (-Math.atan2(PLAYER.eyeHeight - ENEMY_SMALL.height * 0.5, 16) * 180) / Math.PI,
   /**
    * URL query value that turns the scene on (`?scene=perf`).
    *

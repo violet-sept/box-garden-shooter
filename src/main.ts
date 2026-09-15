@@ -82,6 +82,7 @@ const IDLE_INTENT = {
   aim: false,
   reload: false,
   throwItem: false,
+  toggleView: false,
   lookDeltaX: 0,
   lookDeltaY: 0,
 } as const;
@@ -441,12 +442,16 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
    * Places and animates the player's body.
    *
    * All of it now lives in `render/models/characterRig.ts` — the position, the turn toward
-   * the direction of travel, the lean into that turn and the clip choice. It is a module
-   * rather than four lines here because each of those is a presentation rule that needs to
-   * be assertable without a canvas; see that file's header.
+   * the direction of travel, the lean into that turn, the clip choice and (since phase 8) which
+   * of the body and the rifle is drawn in the current view. It is a module rather than four lines
+   * here because each of those is a presentation rule that needs to be assertable without a
+   * canvas; see that file's header.
+   *
+   * The mode is read from `world.camera`, which is the one authority on it, rather than from a
+   * flag kept here. The camera object is passed because the first-person viewmodel hangs off it.
    */
   const syncCharacter = (dt: number): void => {
-    character?.sync(world.player, dt);
+    character?.sync(world.player, dt, world.camera.viewMode, camera);
   };
 
   const hooks: LoopHooks = {
@@ -465,6 +470,12 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
         if (input.wasPressed('stats')) toggleStats();
         if (input.wasPressed('hitlog')) toggleLog();
         if (input.wasPressed('mute')) toggleMute();
+        // `V`. Read through `wasPressed` like the three above it, and applied through
+        // `World.toggleView()` because that call does three things the composition root must not
+        // do itself: flip the simulation's view mode, re-solve the aim for the new pivot, and snap
+        // the camera. Doing it here rather than inside `world.tick` keeps the switch out of the
+        // fixed-step simulation, which has no business knowing the player pressed a view key.
+        if (input.wasPressed('toggleView')) toggleViewMode();
       }
     },
 
@@ -722,6 +733,28 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
 
   /** Whether the hit log panel should be drawn. */
   const hitLogActive = (): boolean => showHitLog;
+
+  /**
+   * First person ↔ third person (`V`).
+   *
+   * Everything that has to happen lives behind `world.toggleView()` — the mode, the aim re-solve
+   * for the moved pivot, and the camera snap — so this function is only three jobs: apply the
+   * switch, hold the viewmodel where it belongs, and tell the player it happened.
+   *
+   * The banner is not decoration. Without it a `V` press in third person changes the picture in a
+   * way the player may read as a camera glitch, and in first person the body simply disappears —
+   * the one case where the feature's own feedback is *absence*. A transient label names the state
+   * the player is now in, which is the same reason the wave banners exist.
+   */
+  function toggleViewMode(): void {
+    const mode = world.toggleView();
+    // The weapon's parent is chosen from the mode, so it has to be told immediately rather than
+    // waiting for the next `render` — the frame in between would draw the rifle in the body's
+    // hands from inside the player's head. `viewMode` is passed as well, because the rig's own
+    // cache is what decides whether to re-parent at all.
+    character?.sync(world.player, 0, mode, camera);
+    hud.banner(mode === 'firstPerson' ? '第一人称视角 [V]' : '第三人称视角 [V]', 'neutral');
+  }
 
   // --- Debug toggles, defined after the loop so the handlers can pause it -----
   function toggleStats(): void {

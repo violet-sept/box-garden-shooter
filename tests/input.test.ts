@@ -312,3 +312,75 @@ describe('mouse look', () => {
     expect(input.sample().lookDeltaY).toBe(0);
   });
 });
+
+/**
+ * The view toggle (`V`).
+ *
+ * Tested here rather than only in the camera tests because the interesting failure is a *wiring*
+ * one, and this project has shipped two of those already: a key that reaches no binding, and an
+ * edge that leaks across ticks. `InputIntent.toggleView` must be true on exactly the tick the key
+ * went down — a level that stayed true would rewrite the camera mode sixty times a second, and
+ * which mode the player ended up in would depend on how long they leaned on the key.
+ */
+describe('view toggle key', () => {
+  let windowStub: ReturnType<typeof makeTarget>;
+  let documentStub: ReturnType<typeof makeTarget> & { pointerLockElement: unknown };
+  let savedWindow: PropertyDescriptor | undefined;
+  let savedDocument: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    windowStub = makeTarget();
+    documentStub = Object.assign(makeTarget(), { pointerLockElement: null });
+    savedWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    savedDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'window', { value: windowStub, configurable: true, writable: true });
+    Object.defineProperty(globalThis, 'document', { value: documentStub, configurable: true, writable: true });
+  });
+
+  afterEach(() => {
+    if (savedWindow) Object.defineProperty(globalThis, 'window', savedWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+    if (savedDocument) Object.defineProperty(globalThis, 'document', savedDocument);
+    else Reflect.deleteProperty(globalThis, 'document');
+  });
+
+  it('maps V onto a one-shot toggle in the next intent', () => {
+    const input = new InputState(makeCanvas(() => undefined));
+
+    windowStub.fire('keydown', { code: 'KeyV', repeat: false });
+    expect(input.sample().toggleView).toBe(true);
+    // The world also reads it through `wasPressed`, which is how the composition root applies it.
+    expect(input.wasPressed('toggleView')).toBe(true);
+
+    input.endTick();
+    expect(input.sample().toggleView).toBe(false);
+    expect(input.wasPressed('toggleView')).toBe(false);
+  });
+
+  it('does not treat a held key as a new press', () => {
+    // The browser's own auto-repeat must not read as "the player pressed it again", or holding V
+    // for a second would flip the view dozens of times.
+    const input = new InputState(makeCanvas(() => undefined));
+
+    windowStub.fire('keydown', { code: 'KeyV', repeat: false });
+    input.endTick();
+    windowStub.fire('keydown', { code: 'KeyV', repeat: true });
+
+    expect(input.sample().toggleView).toBe(false);
+
+    // A genuine release-and-press is a new edge.
+    windowStub.fire('keyup', { code: 'KeyV' });
+    windowStub.fire('keydown', { code: 'KeyV', repeat: false });
+    expect(input.sample().toggleView).toBe(true);
+  });
+
+  it('needs no pointer lock, unlike the mouse', () => {
+    // Deliberate: the view key is a keyboard gesture, and the composition root applies it inside
+    // the same `locked` guard as the other key actions. Asserted here so that a future change
+    // which silences it while the pointer is free is a decision rather than an accident.
+    const input = new InputState(makeCanvas(() => undefined));
+    expect(input.isLocked).toBe(false);
+    windowStub.fire('keydown', { code: 'KeyV', repeat: false });
+    expect(input.sample().toggleView).toBe(true);
+  });
+});

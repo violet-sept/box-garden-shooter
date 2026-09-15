@@ -30,7 +30,7 @@ import { createHud, overlayVisibility, type HudElements } from '#/render/hud/hud
 import { createWorld } from '#/game/World';
 import { createPlayerState } from '#/game/player/player';
 import { createWeaponState } from '#/game/player/weapon';
-import { ENEMY_ARCHETYPES, HEALTH_BAR, PLAYER, WEAPON_MODEL } from '#/core/config';
+import { ENEMY_ARCHETYPES, HEALTH_BAR, PLAYER, VIEW, WEAPON_MODEL } from '#/core/config';
 import { DEG2RAD } from '#/core/math/vec3';
 import { EventBus } from '#/core/events';
 import type { EnemyState } from '#/game/enemies/EnemyState';
@@ -791,6 +791,144 @@ describe('character rig', () => {
       // The body is handed in, so it is the caller's to release — the rig must not eat it.
       expect(model.root.children.filter((child) => (child as Mesh).isMesh).length).toBe(bodyMeshes);
       expect(() => model.dispose()).not.toThrow();
+    });
+  });
+
+  /**
+   * The view mode (phase 8).
+   *
+   * `V` changes two things on the render side, and both of them are the kind of rule that is
+   * invisible to a test suite that only ever calls `sync(player, dt)`: whether the body is drawn
+   * at all, and which object the rifle is a child of. A rig that drew the body in first person
+   * would fill the screen with the inside of a capsule; a rig that left the gun in the body's hands
+   * would draw it inside the player's head, where nothing can see it.
+   *
+   * The camera stand-in is a real `Object3D`, because the viewmodel's *parent* is the observable
+   * thing — asserting on a mock would test the mock.
+   */
+  describe('view mode', () => {
+    const camera = (): Object3D => {
+      const object = new Object3D();
+      object.name = 'camera';
+      return object;
+    };
+
+    it('draws the body only in third person', () => {
+      const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+      const player = playerState();
+      const view = camera();
+
+      rig.sync(player, 1 / 60, 'thirdPerson', view);
+      expect(rig.bodyVisible).toBe(true);
+      expect(rig.model.root.visible).toBe(true);
+      expect(rig.viewMode).toBe('thirdPerson');
+
+      rig.sync(player, 1 / 60, 'firstPerson', view);
+      expect(rig.bodyVisible).toBe(false);
+      expect(rig.model.root.visible).toBe(false);
+
+      // And back: the mode is a rule applied every change, not a one-way door.
+      rig.sync(player, 1 / 60, 'thirdPerson', view);
+      expect(rig.bodyVisible).toBe(true);
+    });
+
+    it('hangs the rifle on the camera in first person and on the body in third', () => {
+      const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+      const player = playerState();
+      const view = camera();
+
+      rig.sync(player, 1 / 60, 'thirdPerson', view);
+      expect(rig.weapon.root.parent).toBe(rig.model.root);
+
+      rig.sync(player, 1 / 60, 'firstPerson', view);
+      expect(rig.weapon.root.parent).toBe(view);
+      // In the camera's own frame: right of the eye, below it, and ahead of the near plane. The
+      // stock reaches ~0.3 m behind the grip, so a `z` that is not negative pushes the gun through
+      // the near clip and it vanishes.
+      expect(rig.weapon.root.position.x).toBeGreaterThan(0);
+      expect(rig.weapon.root.position.y).toBeLessThan(0);
+      expect(rig.weapon.root.position.z).toBeLessThan(-0.2);
+
+      rig.sync(player, 1 / 60, 'thirdPerson', view);
+      expect(rig.weapon.root.parent).toBe(rig.model.root);
+      // Restored to the body-frame anchor, not left at the viewmodel offset.
+      expect(rig.weapon.root.position.x).toBeCloseTo(WEAPON_MODEL.anchor.x, 12);
+      expect(rig.weapon.root.position.z).toBeCloseTo(WEAPON_MODEL.anchor.z, 12);
+    });
+
+    it('slides the viewmodel forward as the sights come up', () => {
+      const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+      const player = playerState();
+      const view = camera();
+
+      rig.sync(player, 1 / 60, 'firstPerson', view);
+      const hip = rig.weapon.root.position.z;
+
+      player.weapon.adsProgress = 1;
+      rig.sync(player, 1 / 60, 'firstPerson', view);
+      const ads = rig.weapon.root.position.z;
+
+      // Forward is `-z` in the camera's frame, so ADS moves it further from zero — and by exactly
+      // the configured amount, because a partly-tuned slide would be a silently different pose.
+      expect(ads).toBeLessThan(hip);
+      expect(hip - ads).toBeCloseTo(VIEW.firstPersonWeaponAdsForward, 12);
+    });
+
+    it('does not move the gun for ADS in third person', () => {
+      // The camera collapses its own shoulder offset while aiming; the gun stays in the hands. A
+      // viewmodel slide applied in both modes would double-count the same motion.
+      const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+      const player = playerState();
+      const view = camera();
+
+      rig.sync(player, 1 / 60, 'thirdPerson', view);
+      player.weapon.adsProgress = 1;
+      rig.sync(player, 1 / 60, 'thirdPerson', view);
+
+      expect(rig.weapon.root.position.x).toBeCloseTo(WEAPON_MODEL.anchor.x, 12);
+      expect(rig.weapon.root.position.z).toBeCloseTo(WEAPON_MODEL.anchor.z, 12);
+    });
+
+    it('restores the body when the run restarts, whatever mode it ended in', () => {
+      // A restart resets the world to the default view, so the rig's cached mode has to be dropped
+      // with it — otherwise the first frames of the new run are drawn under the old mode's rules.
+      const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+      const player = playerState();
+      const view = camera();
+
+      rig.sync(player, 1 / 60, 'firstPerson', view);
+      expect(rig.bodyVisible).toBe(false);
+
+      rig.reset(player.yaw);
+      expect(rig.bodyVisible).toBe(true);
+
+      rig.sync(player, 1 / 60, 'thirdPerson', view);
+      expect(rig.bodyVisible).toBe(true);
+      expect(rig.weapon.root.parent).toBe(rig.model.root);
+    });
+
+    it('refuses to build a first-person frame with no camera to hang the gun on', () => {
+      // A wiring error, and it must be a loud one: the alternative is a gun that is simply not
+      // drawn, which looks exactly like a broken viewmodel.
+      const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+      const player = playerState();
+      rig.sync(player, 1 / 60, 'thirdPerson');
+      expect(() => rig.sync(player, 1 / 60, 'firstPerson')).toThrow(/camera/i);
+    });
+
+    it('keeps animating the body even while it is not drawn', () => {
+      // Freezing the mixer in first person would make the return to third snap to a pose held for
+      // however long the player spent in first person. The clip state is the observable part.
+      const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+      const player = playerState();
+      const view = camera();
+
+      rig.sync(player, 1 / 60, 'firstPerson', view);
+      expect(rig.state).toBe('idle');
+
+      player.velocity.x = PLAYER.sprintSpeed;
+      rig.sync(player, 1 / 60, 'firstPerson', view);
+      expect(rig.state).toBe('run');
     });
   });
 });

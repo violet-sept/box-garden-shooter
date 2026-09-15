@@ -103,6 +103,29 @@ describe('pause menu', () => {
   });
 });
 
+describe('view toggle', () => {
+  it('tells the player the key exists on the screen they start from', () => {
+    // The one piece of discoverability this feature has: first person is the default, so a player
+    // who never learns about `V` never learns there is another view at all. The key list on the
+    // veil is static markup, which is why the assertion is on the markup.
+    const html = read('index.html');
+    expect(html).toContain('切换第一/第三人称');
+    expect(html).toContain('V ');
+  });
+
+  it('wires V through the world rather than moving the camera here', () => {
+    const main = read('src/main.ts');
+    // The switch is a world call, because it has to re-solve the aim for the moved pivot and snap
+    // the camera. A composition root that only moved `world.camera.position` would leave the
+    // crosshair, the tracer and the impact describing three different places.
+    expect(main).toContain("input.wasPressed('toggleView')");
+    expect(main).toContain('world.toggleView()');
+    // And the rig is told immediately, so the frame in between does not draw the rifle in the
+    // body's hands from inside the player's head.
+    expect(main).toMatch(/character\?\.sync\(world\.player, 0, mode, camera\)/);
+  });
+});
+
 describe('desktop shell', () => {
   it('preload still exposes exactly one frozen object and no IPC', () => {
     const preload = read('electron/preload.cjs');
