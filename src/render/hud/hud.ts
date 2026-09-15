@@ -12,7 +12,8 @@
  * decides.
  */
 
-import { WEAPON } from '../../core/config';
+import { CROSSHAIR, PLAYER, WEAPON } from '../../core/config';
+import { spreadToScreenRadius } from '../../game/camera/camera';
 import type { WeaponState } from '../../game/player/weapon';
 import type { LoopMetrics } from '../../core/loop';
 
@@ -128,6 +129,15 @@ export interface HudView {
   readonly charges: number;
   readonly spreadDeg: number;
   readonly fovDeg: number;
+  /**
+   * Aim-down-sights blend in `[0, 1]`, straight from the weapon.
+   *
+   * Needed here because the reticle **crossfades** with it: hip fire draws the spread cone, and
+   * full ADS draws a fixed-size sight instead (see {@link crosshairRadius}). Passing the blend
+   * rather than a boolean is what makes the reticle grow *during* the 0.18 s transition
+   * instead of snapping at the end of it.
+   */
+  readonly adsProgress: number;
   readonly viewportHeight: number;
   readonly metrics: LoopMetrics;
   /** Seconds the current banner has left. */
@@ -188,17 +198,55 @@ export function healthTone(fraction: number): string {
 /**
  * Converts a spread cone to the crosshair's radius in CSS pixels.
  *
- * Duplicated deliberately from the game layer's `spreadToScreenRadius`? No — this
- * is the *only* copy; the game layer does not need it. Keeping the projection in
- * the layer that knows the viewport means the simulation never learns about
- * pixels.
+ * The projection itself is `game/camera/spreadToScreenRadius` — the *one* implementation, which
+ * the camera tests already pin. It is a pure angle → pixels function that happens to live next to
+ * the aim solve, and it takes the viewport height as an argument precisely so no layer has to
+ * know about the screen. There used to be a second copy in `render/camera/cameraRig.ts`; it is
+ * gone, because two copies of a rule is two chances for one of them to be stale.
+ *
+ * ## The two reticles, and why the aimed one is bigger
+ *
+ * The **hip-fire** term is exactly the old spread projection: the ring opens as the cone blooms,
+ * which is the readout that teaches trigger discipline. The **aimed** term crossfades from the
+ * resting hip-fire radius to `CROSSHAIR.adsRadiusPx` — a fixed, deliberately larger ring —
+ * because the projection collapses to a few pixels once the cone is 0.35° *and* the view is
+ * zoomed, and a dot is not a sight picture.
+ *
+ * The result is the larger of the two, and that `max` is load-bearing. Blending straight from the
+ * *live* projection to the aimed ring would make the reticle **shrink first and grow later**: the
+ * spread collapses within ~0.13 s of the 0.18 s ADS transition, so the live term drops to a dot
+ * while the aimed term has barely started moving. Taking the larger keeps the ring monotone —
+ * never smaller than the hip reticle, growing to the aimed one — and still lets a bloomed cone
+ * open the ring wide while aiming.
  */
-export function crosshairRadius(spreadDeg: number, fovDeg: number, viewportHeight: number): number {
-  const halfFov = (fovDeg * 0.5 * Math.PI) / 180;
-  if (halfFov <= 0 || halfFov >= Math.PI / 2) return 0;
-  const radius = (Math.tan((spreadDeg * Math.PI) / 180) / Math.tan(halfFov)) * (viewportHeight * 0.5);
-  // Floor it: a crosshair that collapses to a single pixel stops communicating.
-  return Math.max(6, radius);
+export function crosshairRadius(
+  spreadDeg: number,
+  fovDeg: number,
+  viewportHeight: number,
+  adsProgress = 0,
+): number {
+  const live = Math.max(CROSSHAIR.minRadiusPx, spreadToScreenRadius(spreadDeg, fovDeg, viewportHeight));
+  const blend = Math.max(0, Math.min(1, adsProgress));
+  // Not aiming: the reticle *is* the cone, byte for byte what it was before this feature.
+  if (blend <= 0) return live;
+  const resting = Math.max(
+    CROSSHAIR.minRadiusPx,
+    spreadToScreenRadius(WEAPON.spreadHipDeg, PLAYER.fovHip, viewportHeight),
+  );
+  const aimed = resting + (CROSSHAIR.adsRadiusPx - resting) * blend;
+  return Math.max(live, aimed);
+}
+
+/**
+ * Whether the reticle should be styled as the aimed one.
+ *
+ * A class rather than a second size, because the size already carries the state: this only
+ * thickens the ring and lights it in the HUD's accent colour, which is what makes "I am aiming"
+ * readable at a glance on a busy screen. Thresholded rather than blended because a border can
+ * only be one of two weights, and it uses the same `1.0` boundary as `weapon.aiming`.
+ */
+export function crosshairAiming(adsProgress: number): boolean {
+  return adsProgress >= 1;
 }
 
 /** Creates the HUD controller over the elements in `index.html`. */
@@ -213,6 +261,7 @@ export function createHud(elements: HudElements): Hud {
   let lastCharges = -1;
   let lastStatsLines = '';
   let lastDead = false;
+  let lastAiming = false;
   let bannerTimer: number | null = null;
 
   /**
@@ -233,10 +282,15 @@ export function createHud(elements: HudElements): Hud {
   return {
     update(view) {
       // --- Crosshair: one custom property, no layout thrash -------------------
-      const radius = crosshairRadius(view.spreadDeg, view.fovDeg, view.viewportHeight);
+      const radius = crosshairRadius(view.spreadDeg, view.fovDeg, view.viewportHeight, view.adsProgress);
       if (Math.abs(radius - lastCrosshair) > 0.35) {
         elements.crosshair.style.setProperty('--spread', `${radius.toFixed(1)}px`);
         lastCrosshair = radius;
+      }
+      const aiming = crosshairAiming(view.adsProgress);
+      if (aiming !== lastAiming) {
+        elements.crosshair.classList.toggle('ads', aiming);
+        lastAiming = aiming;
       }
 
       // --- Health -------------------------------------------------------------
@@ -324,7 +378,7 @@ export function createHud(elements: HudElements): Hud {
     },
 
     flashDamage(intensity = 1) {
-      // Clamp first: a 34-damage barrage hit arriving after a 9-damage swipe must
+      // Clamp first: a 34-damage shot arriving after a 9-damage swipe must
       // not stack two animations into a full-screen red wash.
       const amount = Math.max(0, Math.min(1, intensity));
       elements.damageFlash.style.setProperty('--damage', amount.toFixed(3));

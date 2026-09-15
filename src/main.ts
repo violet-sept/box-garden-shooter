@@ -34,7 +34,7 @@ import {
 import { GameLoop, type LoopHooks } from '@/core/loop';
 import { InputState } from '@/core/input';
 import { EventBus } from '@/core/events';
-import { AUDIO, PERF, PLAYER, RENDER, SIM } from '@/core/config';
+import { AUDIO, PERF, PLAYER, RENDER, SIM, WARDEN } from '@/core/config';
 import {
   detectPlatform,
   readFlag,
@@ -51,7 +51,7 @@ import { createSceneRig, syncCameraProjection } from '@/render/scene/sceneRig';
 import { createLevelView } from '@/render/scene/levelView';
 import { applyCameraState } from '@/render/camera/cameraRig';
 import { createEffects } from '@/render/fx/effects';
-import { createTelegraphView, type ImpactMarker } from '@/render/fx/telegraph';
+import { createTelegraphView, type AimLine, type ShotMarker } from '@/render/fx/telegraph';
 import { createSpawnWarnings } from '@/render/fx/spawnWarnings';
 import { createThrowableView } from '@/render/fx/throwableView';
 import { createEnemyView } from '@/render/models/enemyView';
@@ -61,7 +61,6 @@ import {
   PLAYER_MODEL_URL,
 } from '@/render/models/CharacterLoader';
 import { createCharacterRig, type CharacterRig } from '@/render/models/characterRig';
-import { barrageRadius } from '@/game/enemies/largeWarden';
 import { createHud, type HudElements, type OverlayMode } from '@/render/hud/hud';
 import { createPauseMenu } from '@/render/hud/pauseMenu';
 import { createHitLog } from '@/debug/hitlog';
@@ -219,12 +218,12 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
   scene.add(telegraph.root);
 
   /**
-   * Ground markers for incoming spawns.
+   * Ground rings for incoming spawns.
    *
-   * Separate from the barrage markers on purpose: this one is information ("something
-   * is arriving over there"), that one is a reaction window ("this patch is about to
-   * hurt"). Same visual language, different size and colour, because they are often
-   * on screen at the same time.
+   * Separate from the Warden's warning line on purpose: this one is information ("something
+   * is arriving over there"), that one is a reaction window ("this line is about to hurt").
+   * A ground ring and an airborne line are different shapes, so the two cannot be confused
+   * even when they are on screen at the same time.
    */
   const spawnWarnings = createSpawnWarnings();
   spawnWarnings.attach(events);
@@ -388,54 +387,77 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
   const muzzleScratch = new Vector3();
   const aimScratch = new Vector3();
   /**
-   * Ground markers for the incoming barrage.
+   * The Warden's attack, read from the live simulation every frame.
    *
-   * Rebuilt every frame from the live Warden state rather than pushed by an event:
-   * the fuse is a countdown, so the marker has to be re-read each frame anyway, and
-   * a pushed marker would need its own timer that could drift out of step with the
-   * blast it is warning about.
+   * The render layer's interfaces are readonly because it only ever reads; the pooled scratch
+   * objects here have to be written in place, which is the whole reason the allocation is gone.
    */
+  type MutableAimLine = { -readonly [K in keyof AimLine]: AimLine[K] };
+  type MutableShotMarker = { -readonly [K in keyof ShotMarker]: ShotMarker[K] };
   /**
-   * Mutable form of {@link ImpactMarker}.
+   * Both lists are **pooled**, not rebuilt.
    *
-   * The render layer's interface is readonly because it only ever reads; the pooled
-   * scratch objects here have to be written in place, which is the whole reason the
-   * allocation is gone.
+   * The earlier version of this pushed a fresh `{...}` literal per marker per frame — three
+   * markers times 60 frames a second, allocated and thrown away while a Warden's shells were
+   * in flight (plan §5.10.2). `showAimLines`/`showShots` copy the values they need, so one
+   * mutable object per slot is enough.
    */
-  type MutableImpactMarker = { -readonly [K in keyof ImpactMarker]: ImpactMarker[K] };
-  const impactMarkers: MutableImpactMarker[] = [];
+  const aimLines: MutableAimLine[] = [];
+  const shotMarkers: MutableShotMarker[] = [];
 
   /**
-   * Collects the ground markers for every Warden that has locked its impacts.
+   * Collects the warning line and the bolts of every live Warden.
    *
-   * The marker objects are **pooled**, not rebuilt. `showBarrageMarkers` copies the
-   * values it needs, so one mutable object per slot is enough — and the earlier
-   * version pushed a fresh `{...}` literal per marker per frame, which is the phase-4
-   * pool audit's exact definition of a per-frame allocation: three markers times 60
-   * frames a second, allocated and thrown away while a barrage is in flight.
+   * The line comes from `enemy.aim`, which the AI rewrites every tick of the wind-up, and the
+   * fuse is the *same* frame arithmetic the FSM uses (`attackElapsed` against the archetype's
+   * telegraph): the brightness ramp the player reads and the instant the shot leaves are one
+   * calculation, not two.
+   *
+   * `rtt` is render time, and it is what sizes the bolt's streak — the distance the round
+   * covered in the frame being drawn, so a long frame stretches the streak instead of leaving
+   * the head floating ahead of its own tail.
    */
-  const collectImpactMarkers = (): void => {
-    let used = 0;
+  const collectWardenAttack = (rtt: number): void => {
+    let lineCount = 0;
+    let shotCount = 0;
     for (const enemy of world.enemies.targets) {
-      if (!enemy.alive || enemy.kind !== 'large' || enemy.impactPoints.length === 0) continue;
-      const total = Math.max(enemy.barrageTotalFuse, 0.001);
-      for (let i = 0; i < enemy.impactPoints.length; i += 1) {
-        const point = enemy.impactPoints[i];
-        const fuse = enemy.blastTimers[i];
-        if (!point || fuse === undefined || fuse < 0) continue;
-        let slot = impactMarkers[used];
-        if (!slot) {
-          slot = { position: point, radius: 0, fuse: 0, total: 0 };
-          impactMarkers.push(slot);
+      if (!enemy.alive || enemy.kind !== 'large') continue;
+
+      if (enemy.aim.active && enemy.aim.length > 0) {
+        let line = aimLines[lineCount];
+        if (!line) {
+          line = {
+            origin: { x: 0, y: 0, z: 0 },
+            direction: { x: 0, y: 0, z: -1 },
+            length: 0,
+            fuse: 0,
+            total: 0,
+          };
+          aimLines.push(line);
         }
-        slot.position = point;
-        slot.radius = barrageRadius(enemy);
-        slot.fuse = fuse;
-        slot.total = total;
-        used += 1;
+        line.origin = enemy.aim.origin;
+        line.direction = enemy.aim.direction;
+        line.length = enemy.aim.length;
+        line.total = enemy.stats.telegraphTime;
+        line.fuse = Math.max(0, enemy.stats.telegraphTime - enemy.attackElapsed);
+        lineCount += 1;
+      }
+
+      for (const shot of enemy.shots) {
+        if (!shot.alive) continue;
+        let marker = shotMarkers[shotCount];
+        if (!marker) {
+          marker = { position: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 0, z: -1 }, trail: 0 };
+          shotMarkers.push(marker);
+        }
+        marker.position = shot.position;
+        marker.direction = shot.direction;
+        marker.trail = WARDEN.shotSpeed * rtt;
+        shotCount += 1;
       }
     }
-    impactMarkers.length = used;
+    aimLines.length = lineCount;
+    shotMarkers.length = shotCount;
   };
 
   /**
@@ -500,8 +522,9 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
       // 60 Hz simulation reads smoothly on a 144 Hz display.
       enemyView.update(world.enemies.targets, alpha, rtt);
 
-      collectImpactMarkers();
-      telegraph.showBarrageMarkers(impactMarkers);
+      collectWardenAttack(rtt);
+      telegraph.showAimLines(aimLines);
+      telegraph.showShots(shotMarkers);
       telegraph.update(rtt);
       spawnWarnings.update(rtt);
       throwable.update(world.items.throwables, rtt);
@@ -521,6 +544,9 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
         charges: world.charges,
         spreadDeg: world.player.weapon.spreadDeg,
         fovDeg: camera.fov,
+        // The ADS blend, because the reticle's size is a crossfade between the spread ring and
+        // the aimed sight: without it the HUD would draw a hip-fire ring at a zoomed view.
+        adsProgress: world.player.weapon.adsProgress,
         viewportHeight: window.innerHeight,
         metrics: loop.getMetrics(),
         bannerRemaining: 0,
@@ -780,10 +806,11 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
     muzzleTimer = 0.05;
   });
 
-  // The marker's job ends the instant the shell lands: the ring is replaced by an
-  // expanding flash in the same footprint, so "the warning was here" and "the blast
-  // was here" are visibly the same patch of ground.
-  events.on('barrage:impact', (payload) => {
+  // The line's job ends the instant the shot does: the marker is replaced by a yellow
+  // flash in the same footprint, so "the warning was here" and "the shot ended here" are
+  // visibly the same point. A shot that stops on a crate flashes too — the flash is the
+  // picture of where the line ended, and only a hit on the *player* gets the boom sound.
+  events.on('enemy:shotEnded', (payload) => {
     telegraph.flash(payload.position, payload.radius);
   });
 

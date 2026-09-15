@@ -114,21 +114,19 @@ export interface GameEvents {
    * gets, and deriving it by polling the FSM from the render callback would put a
    * frame of latency on the one thing the whole readability budget is spent on.
    *
-   * Emitted twice for a barrage, which is deliberate. The first carries no impact
-   * points (they do not exist during the wind-up) and starts the glow ramp; the
-   * second carries the locked points and starts the ground indicators. Two
-   * emissions of one name, rather than two names, because they are the same thing
-   * happening twice.
+   * Emitted **once** per attack now. It used to be emitted twice for the Warden, the
+   * second time carrying the locked blast points a third of a second before they went
+   * off; the shot has no ground markers to lock, so the second emission became a
+   * duplicate and was removed. "The bolt is away" is `enemy:shot` instead — a different
+   * fact with its own name, rather than one name meaning two things.
    */
   'enemy:telegraph': {
     tick: number;
     id: number;
     archetype: EnemyArchetypeId;
-    kind: 'melee' | 'barrage';
+    kind: 'melee' | 'shot';
     /** Simulation time the telegraph ends and damage becomes possible. */
     until: number;
-    /** For a barrage: the locked impact points, one per delayed blast. */
-    impactPoints?: readonly Vector3[];
   };
   /**
    * An enemy's attack connected with the player.
@@ -144,15 +142,39 @@ export interface GameEvents {
     amount: number;
     /** Where the damage came from, for directional feedback. */
     from: Vector3;
-    /** 'melee' for a contact swing, 'barrage' for an area blast. */
-    source: 'melee' | 'barrage';
+    /** 'melee' for a contact swing, 'shot' for the Warden's straight line. */
+    source: 'melee' | 'shot';
   };
-  /** A barrage impact detonated. Drives the explosion effect. */
-  'barrage:impact': {
+  /**
+   * The Warden fired its shot: one straight line, direction now frozen.
+   *
+   * Carries the origin and direction so the presentation layer can draw the bolt
+   * without reaching into the simulation, and so the report sound lands on the tick
+   * the trigger was pulled rather than a frame later.
+   */
+  'enemy:shot': {
     tick: number;
     enemyId: number;
+    origin: Vector3;
+    direction: Vector3;
+  };
+  /**
+   * A Warden shot's line ended — on the player, on cover, or at the end of its range.
+   *
+   * One event for all three ends because they are one fact ("that line is over"), with the
+   * end point published so the flash is drawn exactly where the damage was resolved.
+   * `hitPlayer` is what separates "it went through me" from "it stopped at the crate":
+   * the impact sound is only for the former, while the yellow flash is for both.
+   */
+  'enemy:shotEnded': {
+    tick: number;
+    enemyId: number;
+    /** Where the line ended. */
     position: Vector3;
+    /** Radius of the shot, so the flash is the size of the thing that hit. */
     radius: number;
+    /** True when the line ended on the player, i.e. when damage was published. */
+    hitPlayer: boolean;
   };
   'player:died': { tick: number };
   'weapon:reloadStarted': { tick: number; duration: number };

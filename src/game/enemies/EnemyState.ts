@@ -49,7 +49,7 @@ export type LargeState =
   | 'IDLE'
   | 'REPOSITION'
   | 'TELEGRAPH'
-  | 'BARRAGE'
+  | 'SHOT'
   | 'RECOVER'
   | 'STAGGER'
   | 'ENRAGE'
@@ -105,34 +105,67 @@ export interface EnemyState {
   /** Weak-point damage accumulated since the last stagger (Warden only). */
   weakPointDamageSinceStagger: number;
   /**
-   * Impact points locked in at the end of a barrage telegraph.
+   * The straight line the Warden's next shot would follow, rewritten every tick of the
+   * wind-up.
    *
-   * Kept on the state rather than in store-private storage because the render
-   * layer draws them: the player's only counterplay to a barrage is to read these
-   * markers and walk out of them, so they are gameplay data, not decoration.
+   * Kept on the state rather than in store-private storage because the render layer draws
+   * it: the player's counterplay to a shot is to read this line and step off it, so it is
+   * gameplay data, not decoration. It is also computed by the *same* function that fires
+   * the shot, so the line the player watched and the line the bolt follows cannot differ by
+   * anything except the last tick of tracking.
    */
-  impactPoints: Vector3[];
+  readonly aim: WardenAim;
   /**
-   * Seconds until each locked impact detonates, parallel to {@link impactPoints}.
+   * The Warden's shots currently in the air.
    *
-   * Written by the store as it schedules the barrage and decremented on the enemy's
-   * own tick, so the AI module never owns a timer and the schedule survives a
-   * stun without silently freezing.
+   * A straight ray each, with the direction frozen at the instant of firing. The store
+   * advances them and resolves them against the player; the render layer reads their
+   * positions to draw the bolts. Nothing here re-aims.
    */
-  blastTimers: number[];
-  /**
-   * Total fuse the current barrage was scheduled with, in seconds.
-   *
-   * Read by the presentation layer to size the ground markers' fill ramp: "how much
-   * of the fuse is left" needs the original length, and re-deriving it in the render
-   * layer from the point count and the stagger would be a second copy of the
-   * schedule's arithmetic — the kind of duplicate that silently desynchronises the
-   * warning from the damage.
-   */
-  barrageTotalFuse: number;
+  shots: WardenShot[];
 
   /** Presentation state, written by the AI and read by the view layer. */
   readonly view: EnemyViewState;
+}
+
+/**
+ * The warning line for the Warden's shot.
+ *
+ * `length` is how far the line is drawn, in metres — to the player's own position rather
+ * than to the configured range, because "this line goes through you" is the information the
+ * warning carries. It is part of the aim solve rather than a render constant so the line the
+ * player reads and the line the shot travels are produced by one piece of arithmetic.
+ */
+export interface WardenAim {
+  readonly origin: Vector3;
+  readonly direction: Vector3;
+  length: number;
+  /** True while the wind-up is running, i.e. while the line should be drawn. */
+  active: boolean;
+}
+
+/** One shot in flight: a point moving along a line that never changes. */
+export interface WardenShot {
+  /** Where it left the Warden. Kept for the presentation layer's trail. */
+  readonly origin: Vector3;
+  /** Unit direction, **frozen at launch**. Nothing may write this after `fireShot`. */
+  readonly direction: Vector3;
+  /** Current position along the line. */
+  readonly position: Vector3;
+  /** Metres travelled since launch, against `WARDEN.shotRange`. */
+  travelled: number;
+  /** False once it has struck the player, hit cover, or run out of range. */
+  alive: boolean;
+}
+
+/** Creates the (inactive) aim line for a freshly spawned large enemy. */
+export function createWardenAim(): WardenAim {
+  return {
+    origin: { x: 0, y: 0, z: 0 },
+    direction: { x: 0, y: 0, z: -1 },
+    length: 0,
+    active: false,
+  };
 }
 
 /** Everything the renderer needs that is not already geometric. */
@@ -187,7 +220,7 @@ export function cooldownScaleFor(enemy: EnemyState): number {
 /** True when the enemy is mid-attack and therefore not free to reposition. */
 export function isAttacking(enemy: EnemyState): boolean {
   const state = enemy.fsm;
-  return state === 'TELEGRAPH' || state === 'ACTIVE' || state === 'BARRAGE' || state === 'RECOVER';
+  return state === 'TELEGRAPH' || state === 'ACTIVE' || state === 'SHOT' || state === 'RECOVER';
 }
 
 /** True when a store entry is a live combatant rather than a practice dummy. */

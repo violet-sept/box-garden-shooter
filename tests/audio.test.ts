@@ -105,42 +105,51 @@ describe('event to sound mapping', () => {
       kind: 'melee',
       until: 1.5,
     });
-    const barrage = idsFor('enemy:telegraph', {
+    const shot = idsFor('enemy:telegraph', {
       tick: 1,
       id: 2,
       archetype: 'large',
-      kind: 'barrage',
+      kind: 'shot',
       until: 2.4,
     });
     expect(melee).toHaveLength(1);
-    expect(barrage).toHaveLength(1);
-    // The melee cue is a reaction window ("back off"); the barrage alarm is a
+    expect(shot).toHaveLength(1);
+    // The melee cue is a reaction window ("back off"); the Warden's alarm is a
     // commitment ("he is charging"). Same event name, different information.
-    expect(melee[0]).not.toBe(barrage[0]);
+    expect(melee[0]).not.toBe(shot[0]);
   });
 
-  it('says something different when the barrage impact points are locked', () => {
+  it('says three different things across one Warden attack', () => {
+    // Charge, fired, struck. Three pieces of information the player acts on differently, so
+    // three sounds — the same rule that keeps the melee cue apart from them.
     const charging = idsFor('enemy:telegraph', {
       tick: 1,
       id: 2,
       archetype: 'large',
-      kind: 'barrage',
+      kind: 'shot',
       until: 2.4,
     });
-    const locked = idsFor('enemy:telegraph', {
+    const fired = idsFor('enemy:shot', {
       tick: 2,
-      id: 2,
-      archetype: 'large',
-      kind: 'barrage',
-      until: 2.4,
-      impactPoints: [P],
+      enemyId: 2,
+      origin: P,
+      direction: { x: 0, y: 0, z: 1 },
     });
-    expect(locked[0]).not.toBe(charging[0]);
-    // ... and neither of them is the explosion itself, which is the sound the whole
-    // warning exists to make unnecessary.
-    const boom = idsFor('barrage:impact', { tick: 3, enemyId: 2, position: P, radius: 4 });
-    expect(boom[0]).not.toBe(locked[0]);
-    expect(boom[0]).not.toBe(charging[0]);
+    const struck = idsFor('enemy:shotEnded', {
+      tick: 3,
+      enemyId: 2,
+      position: P,
+      radius: 0.85,
+      hitPlayer: true,
+    });
+    expect(fired[0]).not.toBe(charging[0]);
+    expect(struck[0]).not.toBe(charging[0]);
+    expect(struck[0]).not.toBe(fired[0]);
+    // A shot that stopped on a crate is a *visual*: sounding the heavy, ducking impact for it
+    // would tell the player they were hit when they were not.
+    expect(
+      idsFor('enemy:shotEnded', { tick: 4, enemyId: 2, position: P, radius: 0.85, hitPlayer: false }),
+    ).toHaveLength(0);
   });
 
   it('layers a bright ping on top of the impact for a weak-point hit', () => {

@@ -204,6 +204,91 @@ describe('describeLockFailure', () => {
 });
 
 /**
+ * Right-click: ADS inside the game, nothing outside it.
+ *
+ * Two rules, and both of them are about the *browser* rather than about the game: the OS context
+ * menu must never appear over the canvas, and the aim flag must not be armable while the pointer
+ * is free (title screen, pause panel, results screen) — a right-click there must not leave the
+ * player aiming the moment they click back in.
+ */
+describe('right-click', () => {
+  let windowStub: ReturnType<typeof makeTarget>;
+  let documentStub: ReturnType<typeof makeTarget> & { pointerLockElement: unknown };
+  let savedWindow: PropertyDescriptor | undefined;
+  let savedDocument: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    windowStub = makeTarget();
+    documentStub = Object.assign(makeTarget(), { pointerLockElement: null });
+    savedWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    savedDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'window', { value: windowStub, configurable: true, writable: true });
+    Object.defineProperty(globalThis, 'document', { value: documentStub, configurable: true, writable: true });
+  });
+
+  afterEach(() => {
+    if (savedWindow) Object.defineProperty(globalThis, 'window', savedWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+    if (savedDocument) Object.defineProperty(globalThis, 'document', savedDocument);
+    else Reflect.deleteProperty(globalThis, 'document');
+  });
+
+  it('swallows the context menu for the whole page, and unhooks it on dispose', () => {
+    const input = new InputState(makeCanvas(() => undefined));
+    // Bound to the document, not the canvas: with the pointer *unlocked* the top element is an
+    // overlay (title, pause, results), so a canvas-only listener lets the menu through in exactly
+    // the states where the player is most likely to right-click by accident.
+    expect(documentStub.count('contextmenu')).toBe(1);
+    let prevented = 0;
+    documentStub.fire('contextmenu', {
+      preventDefault(): void {
+        prevented += 1;
+      },
+    });
+    expect(prevented).toBe(1);
+
+    input.dispose();
+    expect(documentStub.count('contextmenu')).toBe(0);
+  });
+
+  it('reads the right button as ADS only while the pointer is locked', () => {
+    // The `fire` handle is kept on the target itself: `makeCanvas` returns only the DOM-typed
+    // surface, and the whole point here is to deliver a `mousedown` to the canvas element.
+    const target = makeTarget();
+    const canvas = Object.assign(target, { requestPointerLock: () => undefined }) as unknown as HTMLCanvasElement;
+    const input = new InputState(canvas);
+
+    // Free pointer: this is the click that asks for the lock, and it must not arm the sights.
+    target.fire('mousedown', { button: 2, preventDefault(): void {} });
+    expect(input.sample().aim).toBe(false);
+
+    documentStub.pointerLockElement = canvas;
+    documentStub.fire('pointerlockchange');
+    target.fire('mousedown', { button: 2, preventDefault(): void {} });
+    expect(input.sample().aim).toBe(true);
+    expect(input.sample().fire).toBe(false);
+
+    windowStub.fire('mouseup', { button: 2 });
+    expect(input.sample().aim).toBe(false);
+  });
+
+  it('drops the aim flag across a lock boundary, so Esc never leaves it held', () => {
+    const target = makeTarget();
+    const canvas = Object.assign(target, { requestPointerLock: () => undefined }) as unknown as HTMLCanvasElement;
+    const input = new InputState(canvas);
+    documentStub.pointerLockElement = canvas;
+    documentStub.fire('pointerlockchange');
+    target.fire('mousedown', { button: 2, preventDefault(): void {} });
+    expect(input.sample().aim).toBe(true);
+
+    // Esc releases the pointer without a `mouseup` ever arriving.
+    documentStub.pointerLockElement = null;
+    documentStub.fire('pointerlockchange');
+    expect(input.sample().aim).toBe(false);
+  });
+});
+
+/**
  * Mouse look.
  *
  * This is the wiring side of the look input, and it is tested here because it shipped

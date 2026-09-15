@@ -79,9 +79,9 @@ function only(id: SoundId): readonly SoundRequest[] {
  *
  * A static table cannot express the cases that carry their meaning in the payload:
  * a weak-point hit is a different sound from a body hit, the Warden's death is not
- * the Stalker's, and a barrage telegraph says something different on its two
- * emissions. Every branch is a decision about *information*, and the numbers behind
- * each one stay in `SOUND_SPECS`.
+ * the Stalker's, and the Warden's attack says three different things on its way out
+ * (charge, fired, struck). Every branch is a decision about *information*, and the
+ * numbers behind each one stay in `SOUND_SPECS`.
  *
  * Returning an empty array is a deliberate answer, not a gap: `bullet:impact` is
  * not sounded separately because it fires ten times a second and carries almost no
@@ -110,14 +110,20 @@ export function soundRequestsForAny(
     case 'enemy:telegraph': {
       const telegraph = payload as GameEvents['enemy:telegraph'];
       if (telegraph.kind === 'melee') return only('enemyTelegraphMelee');
-      // Two emissions, two meanings: the first (no impact points) is the charge
-      // alarm, the second (points locked, markers down) is "move, that patch is
-      // about to go off".
-      return telegraph.impactPoints ? only('barrageLock') : only('enemyTelegraphBarrage');
+      // The Warden's charge alarm: "he is committing". What happens next has its own
+      // events, because a single attack that fires, flies and lands is three pieces of
+      // information the player acts on differently.
+      return only('enemyTelegraphShot');
     }
 
-    case 'barrage:impact':
-      return only('barrageImpact');
+    case 'enemy:shot':
+      return only('enemyShotFired');
+
+    case 'enemy:shotEnded':
+      // Only the shot that went through the player gets the boom. One that stopped on a
+      // crate is a visual (the yellow flash); sounding the heaviest, ducking-priority
+      // impact for it would tell the player they were hit when they were not.
+      return (payload as GameEvents['enemy:shotEnded']).hitPlayer ? only('enemyShotHit') : NONE;
 
     case 'enemy:died': {
       const died = payload as GameEvents['enemy:died'];

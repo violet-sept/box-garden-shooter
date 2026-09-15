@@ -487,7 +487,16 @@ export function snapCamera(camera: CameraState, aim: AimSolution, player: Player
   forwardFromYawPitch(camera.forward, camera.yaw, camera.pitch);
 }
 
-/** Converts a spread half-angle to a crosshair radius in screen pixels. */
+/**
+ * Converts a spread half-angle to a crosshair radius in screen pixels.
+ *
+ * The **only** implementation of the projection: `render/hud/hud.ts`'s `crosshairRadius` calls
+ * this and then applies the reticle's own rules (the minimum radius, and the larger aimed ring
+ * that replaces the spread readout at full ADS). It lives here because the aim solve is what
+ * defines the cone, and it takes the viewport height as an *argument* so nothing below the HUD
+ * ever learns about the screen — a second copy in the render layer is exactly how one of the two
+ * ends up stale.
+ */
 export function spreadToScreenRadius(spreadDeg: number, fovDeg: number, viewportHeight: number): number {
   // Small-angle projection of a cone half-angle onto the view plane. Exact enough
   // for a crosshair, and — importantly — it uses the *vertical* FOV so the

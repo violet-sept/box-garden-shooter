@@ -42,18 +42,29 @@ import {
   ENEMY_DUMMY,
   ENRAGE_HEALTH_FRACTION,
   PLAYER,
+  PLAYER_HURTBOX_RADIUS,
   SIM,
+  WARDEN,
   type EnemyArchetypeId,
   type EnemyStats,
 } from '../../core/config';
 import type { EventSink, HitZone } from '../../core/events';
-import { type Vector3, copy, distanceXZ, set } from '../../core/math/vec3';
+import { type Vector3, copy, set } from '../../core/math/vec3';
+import { createRayHit, rayAabb, segmentIntersectsAabb } from '../../core/math/intersect';
 import { buildHitboxes, syncHitboxes } from '../combat/hitboxes';
 import { createAttackSlots, resolveKnockback, type AttackSlots } from '../combat/damage';
 import type { CollisionWorld } from '../player/player';
 import type { TargetSpec } from '../level';
-import { createViewState, statsFor, type EnemyKind, type EnemyState, type EnemyStateName } from './EnemyState';
-import { barrageRadius, tickLargeWarden } from './largeWarden';
+import {
+  createViewState,
+  createWardenAim,
+  statsFor,
+  type EnemyKind,
+  type EnemyState,
+  type EnemyStateName,
+  type WardenShot,
+} from './EnemyState';
+import { tickLargeWarden } from './largeWarden';
 import { tickSmallStalker, beginStalkerAttackTurn } from './smallStalker';
 
 /** A blast request produced by an AI module and resolved by the store. */
@@ -63,6 +74,21 @@ export interface BlastRequest {
   readonly radius: number;
   readonly damage: number;
 }
+
+/**
+ * Scratch for the per-tick shot sweep.
+ *
+ * Module-level for the same reason `steering.ts` keeps its own: ticks never nest, and the
+ * phase-4 rule that a simulation tick allocates nothing is easier to hold when the shapes
+ * are declared once. `shotHurtbox` is the inflated player box, rewritten in place for every
+ * shot test.
+ */
+const shotHit = createRayHit();
+const shotFrom = { x: 0, y: 0, z: 0 };
+const shotHurtbox = {
+  center: { x: 0, y: 0, z: 0 },
+  halfExtents: { x: 0, y: 0, z: 0 },
+};
 
 /**
  * How an enemy's attack reaches the player.
@@ -75,7 +101,7 @@ export interface BlastRequest {
  */
 export interface EnemyAttackSink {
   /** Announces a wind-up so the presentation layer can light it up. */
-  telegraph(enemy: EnemyState, kind: 'melee' | 'barrage', until: number, impactPoints?: readonly Vector3[]): void;
+  telegraph(enemy: EnemyState, kind: 'melee' | 'shot', until: number): void;
   /**
    * Resolves a contact melee swing against the player's damage capsule.
    *
@@ -84,10 +110,15 @@ export interface EnemyAttackSink {
    * happened" reads as a broken hitbox. Returns true when it connected.
    */
   melee(enemy: EnemyState, damage: number): boolean;
-  /** Schedules the delayed blasts of a barrage, one timer per impact point. */
-  scheduleBarrage(enemy: EnemyState, impactPoints: readonly Vector3[]): void;
-  /** Advances a barrage's blast timers and detonates anything that is due. */
-  resolveBarrage(enemy: EnemyState, ctx: EnemyContext, dt: number): void;
+  /**
+   * Freezes the Warden's current aim line into a projectile.
+   *
+   * Called at the end of the wind-up, and it copies: after this returns, nothing ever
+   * writes the shot's direction again, which is what "the path does not change once it
+   * is fired" means as code. The flight and the hit test are the store's, not the AI's —
+   * `resolveShots` runs for every live Warden whatever state its FSM is in.
+   */
+  fireShot(enemy: EnemyState): void;
 }
 
 /** What the AI modules need to know about the world this tick. */
@@ -218,9 +249,8 @@ function makeEnemy(id: number, kind: EnemyKind, stats: EnemyStats): EnemyState {
     lastRepathTime: -Infinity,
     enraged: false,
     weakPointDamageSinceStagger: 0,
-    impactPoints: [],
-    blastTimers: [],
-    barrageTotalFuse: 0,
+    aim: createWardenAim(),
+    shots: [],
     view: createViewState(),
   };
 }
@@ -242,9 +272,9 @@ function resetEnemy(enemy: EnemyState, health: number): void {
   enemy.lastRepathTime = -Infinity;
   enemy.enraged = false;
   enemy.weakPointDamageSinceStagger = 0;
-  enemy.impactPoints.length = 0;
-  enemy.blastTimers.length = 0;
-  enemy.barrageTotalFuse = 0;
+  enemy.aim.active = false;
+  enemy.aim.length = 0;
+  enemy.shots.length = 0;
   set(enemy.velocity, 0, 0, 0);
   enemy.view.yaw = 0;
   enemy.view.telegraphGlow = 0;
@@ -398,14 +428,13 @@ export function createEnemyStore(dummySpecs: readonly TargetSpec[], events: Even
    * architecture deliberately does not have.
    */
   const attacks: EnemyAttackSink = {
-    telegraph(enemy, kind, until, impactPoints) {
+    telegraph(enemy, kind, until) {
       events.emit('enemy:telegraph', {
         tick,
         id: enemy.id,
         archetype: enemy.kind === 'dummy' ? 'small' : enemy.kind,
         kind,
         until,
-        ...(impactPoints ? { impactPoints: impactPoints.map((p) => ({ x: p.x, y: p.y, z: p.z })) } : {}),
       });
     },
 
@@ -419,64 +448,132 @@ export function createEnemyStore(dummySpecs: readonly TargetSpec[], events: Even
       return true;
     },
 
-    scheduleBarrage(enemy, impactPoints) {
-      // One timer per locked point, staggered so the three land as three separate
-      // impacts rather than one wide one. The stagger is a readability device: a
-      // single simultaneous blast of the same total damage reads as "I was
-      // unlucky", while three readable ones read as "I should have moved".
-      enemy.blastTimers.length = 0;
-      for (let i = 0; i < impactPoints.length; i += 1) {
-        enemy.blastTimers.push(i * ENEMY.barrageStagger);
-      }
-      // Published for the presentation layer, which sizes the markers' fill ramp
-      // from it. Derived here so the schedule has exactly one author.
-      enemy.barrageTotalFuse = Math.max(0, (impactPoints.length - 1) * ENEMY.barrageStagger);
+    fireShot(enemy) {
+      // The one and only write of a shot's direction. `enemy.aim` was solved by
+      // `solveWardenAim` on this same tick, so the bolt follows the line the player was
+      // just shown; from here on it is a point moving along a frozen vector.
+      const aim = enemy.aim;
+      const shot: WardenShot = {
+        origin: { x: aim.origin.x, y: aim.origin.y, z: aim.origin.z },
+        direction: { x: aim.direction.x, y: aim.direction.y, z: aim.direction.z },
+        position: { x: aim.origin.x, y: aim.origin.y, z: aim.origin.z },
+        travelled: 0,
+        alive: true,
+      };
+      enemy.shots.push(shot);
+      events.emit('enemy:shot', {
+        tick,
+        enemyId: enemy.id,
+        origin: { x: shot.origin.x, y: shot.origin.y, z: shot.origin.z },
+        direction: { x: shot.direction.x, y: shot.direction.y, z: shot.direction.z },
+      });
     },
+  };
 
-    resolveBarrage(enemy, ctx, dt) {
-      const radius = barrageRadius(enemy);
-      for (let i = 0; i < enemy.blastTimers.length; i += 1) {
-        const remaining = enemy.blastTimers[i] ?? Infinity;
-        if (remaining < 0) continue; // already detonated
-        const next = remaining - dt;
-        enemy.blastTimers[i] = next;
-        if (next > 0) continue;
-        // Mark the slot as fired *before* resolving. A negative timer that is not
-        // retired re-detonates every tick for the rest of the barrage, which turns
-        // three shells into a continuous stream at 60 a second -- and reads in play
-        // as "the ground is lava" rather than as three dodgeable impacts.
-        enemy.blastTimers[i] = -1;
-        const point = enemy.impactPoints[i];
-        if (!point) continue;
-        events.emit('barrage:impact', {
+  /**
+   * Whether this tick's travel crosses the player's damage box.
+   *
+   * The box is the one the melee path uses (`PLAYER_HURTBOX_RADIUS` wide and `PLAYER.height`
+   * tall), **inflated by the shot's own radius**: the Minkowski sum of the two shapes, i.e.
+   * "did a 0.85 m bolt touch the body" rather than "did the bolt's centre pass through the
+   * chest". Inflating the box is exact for a sphere and costs no square roots.
+   */
+  const shotCrossesPlayer = (from: Vector3, to: Vector3, playerPosition: Vector3): boolean => {
+    shotHurtbox.center.x = playerPosition.x;
+    shotHurtbox.center.y = playerPosition.y + PLAYER.height * 0.5;
+    shotHurtbox.center.z = playerPosition.z;
+    shotHurtbox.halfExtents.x = PLAYER_HURTBOX_RADIUS + WARDEN.shotRadius;
+    shotHurtbox.halfExtents.y = PLAYER.height * 0.5 + WARDEN.shotRadius;
+    shotHurtbox.halfExtents.z = PLAYER_HURTBOX_RADIUS + WARDEN.shotRadius;
+    return segmentIntersectsAabb(from, to, shotHurtbox);
+  };
+
+  /**
+   * Advances one enemy's shots and resolves whatever their lines end on.
+   *
+   * Deliberately **not** part of the FSM. A bolt is a fact in the world from the instant it
+   * is fired: it keeps flying while its owner recovers, repositions, is staggered or even
+   * dies, so this runs for every live Warden on every tick regardless of what its state
+   * machine is doing. Tying it to the `SHOT` state (the phase-2 rule for area blasts) would
+   * have left the projectile frozen in mid-air the moment the Warden walked away from it.
+   *
+   * Each tick is a **swept** test, not a point sample: at 24 m/s the shot covers 0.4 m per
+   * tick, and a point test would let it pass through a player between two ticks — the
+   * classic fast-projectile tunnelling miss, which the player reads as "it clearly went
+   * through me and nothing happened".
+   *
+   * It damages **the player only**. The area barrage this replaced also caught Stalkers
+   * (bombing the swarm was a legitimate play); a bolt does not, because a line that
+   * silently kills the enemies around the player would make "drag the pack onto the line"
+   * a strategy the attack's own visual language does not describe.
+   */
+  const resolveShots = (enemy: EnemyState, ctx: EnemyContext, dt: number): void => {
+    for (const shot of enemy.shots) {
+      if (!shot.alive) continue;
+      const step = WARDEN.shotSpeed * dt;
+      set(shotFrom, shot.position.x, shot.position.y, shot.position.z);
+
+      // How far this tick's travel gets before it meets cover. The nearest solid wins, so a
+      // shot is stopped by the first crate on its line rather than by whichever one the
+      // level happens to list last.
+      let blockedAt = Infinity;
+      for (const box of ctx.collision.solids) {
+        const hit = rayAabb(shotHit, shot.position, shot.direction, box);
+        if (!hit) continue;
+        if (hit.inside) {
+          blockedAt = 0;
+          break;
+        }
+        if (hit.t > 0 && hit.t < blockedAt) blockedAt = hit.t;
+      }
+
+      const travel = Math.min(step, blockedAt);
+      shot.position.x += shot.direction.x * travel;
+      shot.position.y += shot.direction.y * travel;
+      shot.position.z += shot.direction.z * travel;
+      shot.travelled += travel;
+
+      // The player is tested against the same shortened segment, so a body behind a crate
+      // cannot be hit through it — cover has to work against this attack or it is not cover.
+      if (ctx.playerAlive && shotCrossesPlayer(shotFrom, shot.position, ctx.playerPosition)) {
+        shot.alive = false;
+        events.emit('enemy:shotEnded', {
           tick,
           enemyId: enemy.id,
-          position: { x: point.x, y: point.y, z: point.z },
-          radius,
+          position: { x: shot.position.x, y: shot.position.y, z: shot.position.z },
+          radius: WARDEN.shotRadius,
+          hitPlayer: true,
         });
-        // Everything inside the ring takes a share, enemies included: a Warden
-        // that bombs its own Stalkers is consistent, and it is the player's reward
-        // for dragging the swarm into the barrage.
-        store.applyBlast({ ownerId: enemy.id, position: point, radius, damage: enemy.stats.damage });
-        // The player's share is published as an ordinary damage request, so
-        // i-frames apply to a barrage exactly as they do to a swipe: one rule, and
-        // in one place.
-        if (ctx.playerAlive) {
-          const distance = distanceXZ(point, ctx.playerPosition);
-          if (distance <= radius) {
-            // Linear falloff, floored at 1: a player clipped by the edge of a
-            // 34-damage blast must still read as hit, or the marker lies.
-            const falloff = 1 - distance / Math.max(radius, 1e-6);
-            events.emit('player:damaged', {
-              tick,
-              amount: Math.max(1, Math.round(enemy.stats.damage * falloff)),
-              from: { x: point.x, y: point.y, z: point.z },
-              source: 'barrage',
-            });
-          }
-        }
+        // Published as an ordinary damage request so i-frames apply to a shot exactly as
+        // they do to a swipe: one rule, and in one place. The damage is the archetype's
+        // configured value with no falloff — the shot either crossed the body or it did not.
+        events.emit('player:damaged', {
+          tick,
+          amount: enemy.stats.damage,
+          from: { x: shot.position.x, y: shot.position.y, z: shot.position.z },
+          source: 'shot',
+        });
+        continue;
       }
-    },
+
+      if (blockedAt <= step) {
+        shot.alive = false;
+        events.emit('enemy:shotEnded', {
+          tick,
+          enemyId: enemy.id,
+          position: { x: shot.position.x, y: shot.position.y, z: shot.position.z },
+          radius: WARDEN.shotRadius,
+          hitPlayer: false,
+        });
+        continue;
+      }
+
+      if (shot.travelled >= WARDEN.shotRange) {
+        // Out of range: retired silently. There is nothing out there to flash, and a bolt
+        // vanishing at the far edge of the arena is not information the player needs.
+        shot.alive = false;
+      }
+    }
   };
 
   /** Applies velocity, resolves collisions, separates from neighbours. */
@@ -535,6 +632,12 @@ export function createEnemyStore(dummySpecs: readonly TargetSpec[], events: Even
   const advance = (enemy: EnemyState, ctx: EnemyContext): void => {
     enemy.stateTime += ctx.dt;
     enemy.attackCooldown = Math.max(0, enemy.attackCooldown - ctx.dt);
+
+    // Shots fly whatever the owner is doing — stunned, recovering, repositioning or dead —
+    // which is why this is here rather than inside the Warden's FSM. It runs before the FSM
+    // so a bolt fired on this tick has moved by the time the render layer reads it, and so
+    // "where the player is" and "whether the line crossed them" describe one world state.
+    if (enemy.kind === 'large') resolveShots(enemy, ctx, ctx.dt);
 
     if (enemy.stunRemaining > 0) {
       enemy.stunRemaining = Math.max(0, enemy.stunRemaining - ctx.dt);

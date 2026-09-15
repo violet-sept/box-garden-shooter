@@ -7,11 +7,11 @@
  * announced by a ring on the ground, and the ring is the *only* thing that tells the
  * player which patch of the arena is about to become dangerous.
  *
- * Relationship to `telegraph.ts`: that layer marks a Warden's incoming barrage, which
- * is a reaction window the player must act inside. This one marks an arrival, which
- * is information. They share nothing but the visual language of a ring on the floor,
- * and the two are deliberately different sizes and colours so they cannot be confused
- * when both are on screen at once.
+ * Relationship to `telegraph.ts`: that layer marks a Warden's incoming shot, which is a
+ * reaction window the player must act inside. This one marks an arrival, which is
+ * information. They share nothing but being visible from a distance, and the two are
+ * deliberately different shapes and colours — a ring on the floor against a line in the air —
+ * so they cannot be confused when both are on screen at once.
  *
  * Pooled (hard rule 8): a late wave puts several enemies on the ground every second,
  * and a mesh per spawn would be the exact allocation pattern the FX budget exists to
@@ -71,7 +71,7 @@ interface WarningSlot {
 export function createSpawnWarnings(): SpawnWarnings {
   const root = new Group();
   root.name = 'spawn-warnings';
-  // Same band as the barrage markers: above the ground, below everything else.
+  // Above the ground, below everything else that wants to be seen.
   root.renderOrder = 1;
 
   const slots: WarningSlot[] = [];
@@ -163,8 +163,8 @@ export function createSpawnWarnings(): SpawnWarnings {
           slot.group.visible = false;
           continue;
         }
-        // The fill closes in as the enemy gets closer, exactly like the barrage
-        // marker. One visual language for "how long have I got".
+        // The fill closes in as the enemy gets closer. One visual language for "how long
+        // have I got", shared with the Warden's warning line's brightness ramp.
         const remaining = slot.life / slot.total;
         const filled = 1 - remaining;
         slot.fill.scale.setScalar(Math.max(0.02, filled));

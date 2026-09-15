@@ -24,6 +24,7 @@ import {
   ENRAGE_HEALTH_FRACTION,
   PLAYER,
   SIM,
+  WARDEN,
   WEAPON,
 } from '#/core/config';
 import { EventBus, type GameEvents } from '#/core/events';
@@ -36,7 +37,6 @@ import { createWeaponState } from '#/game/player/weapon';
 import { createEnemyStore, type EnemyContext, type EnemyStore } from '#/game/enemies/EnemyStore';
 import { phaseAt, type AttackFrame } from '#/game/enemies/frames';
 import { isAttacking, type EnemyState } from '#/game/enemies/EnemyState';
-
 const DT = 1 / SIM.tickHz;
 
 /** An empty arena: no obstacles, so movement tests are about the AI and nothing else. */
@@ -58,8 +58,10 @@ interface Harness {
   time: number;
   /** Every `player:damaged` request the enemy layer published. */
   readonly damageRequests: GameEvents['player:damaged'][];
-  /** Every barrage impact that detonated. */
-  readonly impacts: GameEvents['barrage:impact'][];
+  /** Every Warden shot that left the barrel. */
+  readonly shots: GameEvents['enemy:shot'][];
+  /** Every shot whose line ended, with where and on what. */
+  readonly shotEnds: GameEvents['enemy:shotEnded'][];
   /** Every telegraph that opened. */
   readonly telegraphs: GameEvents['enemy:telegraph'][];
   /** Advances the whole harness by `seconds`. */
@@ -98,15 +100,16 @@ function harness(world: CollisionWorld = emptyWorld(), dummies = 0): Harness {
   const player = createPlayerState(createWeaponState(1));
 
   const damageRequests: GameEvents['player:damaged'][] = [];
-  const impacts: GameEvents['barrage:impact'][] = [];
+  const shots: GameEvents['enemy:shot'][] = [];
+  const shotEnds: GameEvents['enemy:shotEnded'][] = [];
   const telegraphs: GameEvents['enemy:telegraph'][] = [];
   /**
    * Whether published damage is actually applied to the stand-in player.
    *
-   * A handful of tests are about the *enemy* — a Warden's enrage, its barrage
-   * schedule — and need a player who cannot die in the middle of the run. Those
-   * turn this off so the scene stays stable; the damage itself is verified
-   * separately, with it on, by the tests that are about damage.
+   * A handful of tests are about the *enemy* — a Warden's enrage, its shot schedule — and need
+   * a player who cannot die in the middle of the run. Those turn this off so the scene stays
+   * stable; the damage itself is verified separately, with it on, by the tests that are about
+   * damage.
    */
   let lethal = true;
 
@@ -118,8 +121,11 @@ function harness(world: CollisionWorld = emptyWorld(), dummies = 0): Harness {
     const result = applyPlayerDamage(player, payload.amount, payload.from, time);
     void result;
   });
-  events.on('barrage:impact', (payload) => {
-    impacts.push(payload);
+  events.on('enemy:shot', (payload) => {
+    shots.push(payload);
+  });
+  events.on('enemy:shotEnded', (payload) => {
+    shotEnds.push(payload);
   });
   events.on('enemy:telegraph', (payload) => {
     telegraphs.push(payload);
@@ -175,7 +181,8 @@ function harness(world: CollisionWorld = emptyWorld(), dummies = 0): Harness {
       time = value;
     },
     damageRequests,
-    impacts,
+    shots,
+    shotEnds,
     telegraphs,
     run(seconds) {
       advance(Math.round(seconds * SIM.tickHz));
@@ -490,7 +497,7 @@ describe('Stalker: collisions', () => {
   });
 });
 
-describe('Warden: distance band and prediction', () => {
+describe('Warden: distance band', () => {
   it('closes when further away than the band', () => {
     const h = harness();
     h.setPlayer(0, 0);
@@ -517,82 +524,191 @@ describe('Warden: distance band and prediction', () => {
     expect(distance).toBeGreaterThanOrEqual(17);
     expect(distance).toBeLessThanOrEqual(27);
   });
+});
 
-  it('locks and publishes impact points only when the wind-up ends', () => {
-    const h = harness();
-    h.setPlayer(0, 0);
-    spawnWarden(h, 0, -20);
-    // Enter the telegraph.
-    for (let i = 0; i < 600 && h.enemy(1).fsm !== 'TELEGRAPH'; i += 1) h.advance(1);
-    const warden = h.enemy(1);
-    expect(warden.fsm).toBe('TELEGRAPH');
-    const telegraphTicks = Math.round(ENEMY_LARGE.telegraphTime * SIM.tickHz);
-    // Every tick of the wind-up has to leave the points empty: the player cannot
-    // dodge a marker that is still being computed, and a marker that moves during
-    // the wind-up teaches them to ignore markers.
-    for (let i = 0; i < telegraphTicks - 1; i += 1) {
-      expect(warden.impactPoints.length).toBe(0);
-      h.advance(1);
-    }
-    // One tick later the wind-up is over, three points exist, and they have been
-    // published so the presentation layer can draw the ground indicators.
-    h.advance(2);
-    expect(warden.impactPoints.length).toBe(3);
-    expect(h.telegraphs.some((t) => t.impactPoints !== undefined && t.impactPoints.length === 3)).toBe(true);
-  });
+describe('Warden: the straight shot', () => {
+  /** Perpendicular distance from a point to an infinite line through `origin`. */
+  function distanceToRay(
+    origin: { x: number; y: number; z: number },
+    direction: { x: number; y: number; z: number },
+    point: { x: number; y: number; z: number },
+  ): number {
+    const vx = point.x - origin.x;
+    const vy = point.y - origin.y;
+    const vz = point.z - origin.z;
+    const t = vx * direction.x + vy * direction.y + vz * direction.z;
+    return Math.hypot(vx - direction.x * t, vy - direction.y * t, vz - direction.z * t);
+  }
 
-  it('leads a moving player rather than aiming where they are', () => {
-    const h = harness();
-    h.setPlayer(0, 0);
-    h.setPlayerVelocity(6, 0);
-    const warden = spawnWarden(h, 0, -20);
-    for (let i = 0; i < 600 && h.enemy(1).fsm !== 'TELEGRAPH'; i += 1) h.advance(1);
-    h.advance(90);
-    expect(warden.impactPoints.length).toBe(3);
-    const lead = warden.impactPoints[0];
-    // The first blast is on the predicted point, which is ahead of the player.
-    expect(lead?.x).toBeGreaterThan(h.player.position.x);
-  });
+  /** The player's chest, which is what the line is solved against. */
+  function chest(h: Harness): { x: number; y: number; z: number } {
+    return { x: h.player.position.x, y: h.player.position.y + PLAYER.height * 0.5, z: h.player.position.z };
+  }
 
-  it('detonates three staggered blasts per barrage', () => {
-    const h = harness();
-    // The barrage is the subject; a player who dies to it part-way through would
-    // end the run before the third shell lands.
-    h.setLethal(false);
-    h.setPlayer(0, 0);
-    const warden = spawnWarden(h, 0, -20);
+  /** Runs until the Warden has fired, or gives up noisily. */
+  function runUntilFired(h: Harness, warden: EnemyState): void {
     let guard = 0;
-    while (h.impacts.length < 3 && guard < 1200) {
+    while (warden.shots.length === 0 && guard < 1200) {
       h.advance(1);
       guard += 1;
     }
-    expect(h.impacts.length).toBe(3);
-    // Three distinct impact points, and they are the same three the markers point
-    // at: the telegraph the player read and the damage they took describe one set
-    // of circles, not two.
-    const points = warden.impactPoints;
-    expect(points.length).toBe(3);
-    const key = (p: { x: number; z: number }) => `${p.x.toFixed(3)},${p.z.toFixed(3)}`;
-    expect(new Set(points.map(key)).size).toBe(3);
-    expect(new Set(h.impacts.map((impact) => key(impact.position))).size).toBe(3);
-    // Spread over consecutive ticks rather than simultaneous: the stagger is what
-    // makes the barrage read as three impacts instead of one wide one.
-    expect(new Set(h.impacts.map((impact) => impact.tick)).size).toBe(3);
-    // Every impact carries the archetype's blast radius, so the markers and the
-    // damage describe the same circle.
-    for (const impact of h.impacts) expect(impact.radius).toBeGreaterThan(1);
+    expect(warden.shots.length, 'the Warden never fired').toBeGreaterThan(0);
+  }
+
+  it('fires from its own body, straight at the player, once per attack', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const warden = spawnWarden(h, 0, -20);
+    runUntilFired(h, warden);
+
+    expect(h.shots).toHaveLength(1);
+    const shot = warden.shots[0];
+    if (!shot) throw new Error('no shot');
+    // It left the Warden's body, not the player's: the muzzle is inside its own radius.
+    const fromBody = Math.hypot(shot.origin.x - warden.position.x, shot.origin.z - warden.position.z);
+    expect(fromBody).toBeLessThanOrEqual(ENEMY_LARGE.radius + 1e-6);
+    expect(shot.origin.z).toBeLessThan(-18);
+    // The line points at the player's chest. This is the whole requirement: the attack is a
+    // line from the Warden to the player, so the chest is *on* it.
+    expect(distanceToRay(shot.origin, shot.direction, chest(h))).toBeLessThan(0.05);
+    expect(Math.hypot(shot.direction.x, shot.direction.y, shot.direction.z)).toBeCloseTo(1, 12);
+    // And it is aimed at the player as they *are*, not where they were going: a line offset
+    // into their future would visibly miss the body it is drawn from.
+    expect(h.telegraphs.filter((t) => t.kind === 'shot')).toHaveLength(1);
   });
 
-  it('damages the player through a barrage without hitting itself', () => {
+  it('freezes the direction at launch, so stepping off the line is a real dodge', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const warden = spawnWarden(h, 0, -20);
+    runUntilFired(h, warden);
+    const shot = warden.shots[0];
+    if (!shot) throw new Error('no shot');
+    const frozen = { ...shot.direction };
+
+    // The player walks sideways off the line while the bolt is in the air.
+    h.setPlayer(5, 0);
+    h.advance(Math.ceil(WARDEN.shotRange / WARDEN.shotSpeed / DT) + 10);
+
+    // Bit-for-bit identical: nothing re-aims a shot in flight. A direction that followed the
+    // player would make the dodge impossible rather than skilful.
+    expect(shot.direction.x).toBe(frozen.x);
+    expect(shot.direction.y).toBe(frozen.y);
+    expect(shot.direction.z).toBe(frozen.z);
+    expect(h.damageRequests.some((request) => request.source === 'shot')).toBe(false);
+    expect(shot.alive).toBe(false);
+    expect(h.shotEnds.every((end) => end.hitPlayer === false)).toBe(true);
+  });
+
+  it('damages a player who stays on the path', () => {
     const h = harness();
     h.setLethal(false);
     h.setPlayer(0, 0);
     spawnWarden(h, 0, -20);
     h.run(4);
-    const own = h.enemy(1);
-    expect(h.damageRequests.some((request) => request.source === 'barrage')).toBe(true);
-    // A Warden standing in its own barrage takes nothing: the owner is excluded.
-    expect(own.health).toBe(ENEMY_LARGE.maxHealth);
+    const hit = h.damageRequests.find((request) => request.source === 'shot');
+    expect(hit).toBeDefined();
+    // No falloff and no blast share: the shot either crossed the body or it did not, so it
+    // deals the archetype's configured damage exactly.
+    expect(hit?.amount).toBe(ENEMY_LARGE.damage);
+    expect(h.shotEnds.some((end) => end.hitPlayer)).toBe(true);
+  });
+
+  it('hits only the player: the line passes through enemies without touching them', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const warden = spawnWarden(h, 0, -20);
+    // A Stalker parked midway down the line. The area attack this replaced bombed its own
+    // swarm; a single-target line must not.
+    const stalker = spawnStalker(h, 0, -10, 'IDLE');
+    h.run(6);
+    expect(h.damageRequests.some((request) => request.source === 'shot')).toBe(true);
+    expect(stalker.health).toBe(ENEMY_SMALL.maxHealth);
+    expect(warden.health).toBe(ENEMY_LARGE.maxHealth);
+  });
+
+  it('does not shoot through cover', () => {
+    const h = harness(walledWorld());
+    h.setLethal(false);
+    // The wall sits at x = 4, between the Warden at the origin and the player at x = 10.
+    h.setPlayer(10, 0);
+    spawnWarden(h, 0, 0);
+    let guard = 0;
+    while (h.shotEnds.length === 0 && guard < 1200) {
+      h.advance(1);
+      guard += 1;
+    }
+    expect(h.shotEnds.length).toBeGreaterThan(0);
+    expect(h.shotEnds.every((end) => end.hitPlayer === false)).toBe(true);
+    expect(h.damageRequests.some((request) => request.source === 'shot')).toBe(false);
+    // The line really did end at the wall rather than short of it.
+    expect(h.shotEnds[0]?.position.x).toBeGreaterThan(3);
+    expect(h.shotEnds[0]?.position.x).toBeLessThan(4.6);
+  });
+
+  it('retires the bolt at the end of its range instead of flying for ever', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const warden = spawnWarden(h, 0, -20);
+    runUntilFired(h, warden);
+    const shot = warden.shots[0];
+    if (!shot) throw new Error('no shot');
+    // Step off the line so nothing ends it early, then wait out the whole flight.
+    h.setPlayer(6, 0);
+    h.run(WARDEN.shotRange / WARDEN.shotSpeed + 0.5);
+    expect(shot.alive).toBe(false);
+    expect(shot.travelled).toBeGreaterThanOrEqual(WARDEN.shotRange - WARDEN.shotSpeed * DT);
+    // It stops exactly at the range, not past it.
+    expect(shot.travelled).toBeLessThan(WARDEN.shotRange + 1);
+    // Flying off into the distance is silent: there is nothing out there to flash at.
+    expect(h.shotEnds.length).toBe(0);
+  });
+
+  it('shows the warning line through the whole wind-up, aimed where the shot will go', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const warden = spawnWarden(h, 0, -20);
+    for (let i = 0; i < 900 && warden.fsm !== 'TELEGRAPH'; i += 1) h.advance(1);
+    expect(warden.fsm).toBe('TELEGRAPH');
+    // From the first tick of the wind-up: a line that appears late is a line the player cannot
+    // use, which is the failure the old ground markers existed to avoid.
+    expect(warden.aim.active).toBe(true);
+    expect(warden.aim.length).toBeGreaterThan(15);
+    expect(distanceToRay(warden.aim.origin, warden.aim.direction, chest(h))).toBeLessThan(0.05);
+
+    // It tracks the player, because the shot has not been fired yet.
+    h.setPlayer(7, 0);
+    h.advance(5);
+    expect(distanceToRay(warden.aim.origin, warden.aim.direction, chest(h))).toBeLessThan(0.05);
+
+    // And it comes down on the instant the bolt leaves, so the player is never looking at two
+    // things that both claim to be the shot.
+    const telegraphTicks = Math.round(ENEMY_LARGE.telegraphTime * SIM.tickHz);
+    h.advance(telegraphTicks);
+    expect(warden.aim.active).toBe(false);
+    expect(warden.shots.length).toBe(1);
+  });
+
+  it('keeps resolving a bolt while its owner is busy doing something else', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const warden = spawnWarden(h, 0, -20);
+    runUntilFired(h, warden);
+    const shot = warden.shots[0];
+    if (!shot) throw new Error('no shot');
+    const travelled = shot.travelled;
+    // The Warden is already walking through RECOVER and back into its band hold by the time
+    // the bolt is halfway down the line. A projectile tied to its owner's animation would
+    // freeze in mid-air here.
+    h.run(0.4);
+    expect(warden.fsm).toBe('RECOVER');
+    expect(shot.travelled).toBeGreaterThan(travelled + 5);
   });
 });
 

@@ -20,7 +20,6 @@ import {
   arrive,
   clampSpeed,
   keepDistance,
-  leadTarget,
   seek,
   separation,
 } from '#/game/enemies/steering';
@@ -229,32 +228,14 @@ describe('keepDistance', () => {
   });
 });
 
-describe('leadTarget', () => {
-  it('aims ahead of a moving target', () => {
-    leadTarget(OUT, vec3(0, 0, 0), vec3(4, 0, 0), 0.45);
-    expect(OUT.x).toBeCloseTo(1.8, 12);
-    expect(OUT.z).toBe(0);
-  });
-
-  it('aims at the target itself when it is standing still', () => {
-    leadTarget(OUT, vec3(2, 0, -3), vec3(0, 0, 0), 0.45);
-    expect(OUT.x).toBe(2);
-    expect(OUT.z).toBe(-3);
-  });
-
-  it('does not lead vertically, so the impact stays on the ground plane', () => {
-    leadTarget(OUT, vec3(0, 1.6, 0), vec3(0, -12, 0), 0.45);
-    expect(OUT.y).toBe(1.6);
-  });
-
-  it('lands on the target if the target keeps its velocity', () => {
-    // The whole point of leading: simulate the target for the lead time and the
-    // predicted point is exactly where it ends up.
-    const target = vec3(0, 0, 0);
-    const velocity = vec3(3, 0, -2);
-    const lead = 0.45;
-    leadTarget(OUT, target, velocity, lead);
-    expect(OUT.x).toBeCloseTo(target.x + velocity.x * lead, 12);
-    expect(OUT.z).toBeCloseTo(target.z + velocity.z * lead, 12);
-  });
-});
+/*
+ * `leadTarget` lived here and is gone, deliberately.
+ *
+ * It predicted where a moving player would be `leadTime` seconds later, and its only caller was
+ * the Warden's area barrage: the shells had to land where the player was *going* to be, because
+ * they were aimed at the ground the player would run across. The shot that replaced that attack
+ * is a straight line from the Warden to the player's current position, so a lead prediction has
+ * no caller and no meaning — and a helper that only its own test exercises is exactly the "dead
+ * knob" this project removes rather than keeps warm. The four assertions that used to sit here
+ * were assertions about a behaviour, and the behaviour is gone.
+ */

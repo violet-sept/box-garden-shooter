@@ -9,7 +9,6 @@
  */
 
 import { Euler, PerspectiveCamera, Vector3 } from 'three';
-import { DEG2RAD } from '../../core/math/vec3';
 import type { CameraState } from '../../game/camera/camera';
 
 /** Rotation order the camera state's yaw/pitch/roll are expressed in. */
@@ -45,11 +44,4 @@ export function applyCameraState(camera: PerspectiveCamera, state: CameraState):
 /** The camera's forward vector as a `THREE.Vector3`, for effect placement. */
 export function cameraForward(camera: PerspectiveCamera, out: Vector3): Vector3 {
   return out.set(0, 0, -1).applyQuaternion(camera.quaternion);
-}
-
-/** Converts a spread half-angle to a crosshair radius in CSS pixels. */
-export function crosshairRadiusPx(spreadDeg: number, fovDeg: number, viewportHeight: number): number {
-  const halfFov = fovDeg * 0.5 * DEG2RAD;
-  if (halfFov <= 0 || halfFov >= Math.PI / 2) return 0;
-  return (Math.tan(spreadDeg * DEG2RAD) / Math.tan(halfFov)) * (viewportHeight * 0.5);
 }

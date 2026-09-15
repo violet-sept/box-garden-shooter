@@ -98,7 +98,7 @@ const SPARK_BURSTS = 24;
 const UP: PointLike = { x: 0, y: 1, z: 0 };
 /** Pooled floating damage numbers. */
 const DAMAGE_NUMBERS = 32;
-/** Concurrent blast shells. Two items plus a Warden barrage, with slack. */
+/** Concurrent blast shells. Two items plus a Warden shot, with slack. */
 const BLAST_SHELLS = 6;
 /** Seconds a blast shell takes to expand and fade out. */
 const BLAST_SHELL_LIFE = 0.42;

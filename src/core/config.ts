@@ -368,6 +368,40 @@ export const VIEW = {
   firstPersonWeaponAdsForward: 0.18,
 } as const;
 
+/**
+ * The aiming reticle.
+ *
+ * ## Why the reticle gets *bigger* when the player aims
+ *
+ * The hip-fire reticle is the spread cone projected onto the view plane (see
+ * `crosshairRadius` in `render/hud/hud.ts`): it opens as the cone blooms, which is the
+ * readout that teaches trigger discipline. At full ADS that same projection collapses to a
+ * few pixels — the cone is 0.35° *and* the view is zoomed, so both terms shrink — and a dot
+ * is not a sight picture. So the reticle crossfades to a **fixed-size aimed ring** as the
+ * aim blend runs:
+ *
+ *   - hip fire: the ring *is* the cone, unchanged from every phase before this one;
+ *   - aimed: the ring is a deliberate sight around the aim point, larger than the hip
+ *     reticle and no longer a spread readout (while aiming, the cone settles within the
+ *     0.18 s ADS transition, so there is nothing left for it to read).
+ *
+ * The values are CSS pixels rather than world units because a reticle is a sight: it must
+ * keep the same apparent size on a 4K monitor and on a laptop panel, exactly like the
+ * centre dot it is drawn around.
+ */
+export const CROSSHAIR = {
+  /** Floor on the hip-fire ring's radius, CSS px. A ring collapsed to a point stops communicating. */
+  minRadiusPx: 6,
+  /**
+   * Radius of the aimed ring at full ADS, CSS px.
+   *
+   * Larger than the hip-fire ring on purpose — that is the whole "the reticle grows when you
+   * aim" requirement, and it is the only one of the two sizes that is a *decision* rather
+   * than a projection.
+   */
+  adsRadiusPx: 46,
+} as const;
+
 /** Statistics shared by every enemy archetype. */
 export interface EnemyStats {
   readonly id: string;
@@ -454,7 +488,7 @@ export const ENEMY_SMALL: EnemyStats = {
  * small wave is cleared or the wave timer expires.
  * Designed to survive 3.7 magazines of body fire (110 rounds) or 2.3 magazines
  * of weak-point fire (69 rounds), so the kill always needs a reload the player
- * chose; and to kill an unwary player in 5 barrage hits (150 / 34).
+ * chose; and to kill an unwary player in 5 shot hits (150 / 34).
  */
 export const ENEMY_LARGE: EnemyStats = {
   id: 'large',
@@ -542,14 +576,6 @@ export const ENEMY = {
 
   /** Seconds an enemy stands still while it turns to face the player. */
   turnDelay: 0.12,
-
-  /** Blasts a barrage calls down, and the delay added per blast, in seconds. */
-  barrageBlasts: 3,
-  barrageStagger: 0.32,
-  /** Lifetime of a landed blast's damage zone, seconds. */
-  barrageZoneLife: 0.18,
-  /** Blast radius in metres, as a fraction of the Warden's height. */
-  barrageRadius: 3.4,
 } as const;
 
 /**
@@ -747,9 +773,9 @@ export const DIRECTOR = {
   /**
    * Radius of the ground ring drawn under an incoming spawn, in metres.
    *
-   * Smaller than the Warden's barrage marker on purpose: this one says "an enemy is
-   * arriving", not "this patch of ground is about to hurt", and the two must not be
-   * confused at a glance in the middle of a barrage.
+   * Smaller than the impact flash of a Warden shot on purpose: this one says "an enemy is
+   * arriving", not "this line is about to hurt", and the two must not be
+   * confused at a glance when a shot is in the air.
    */
   spawnWarningRadius: 1.5,
   /** Radius of the ring drawn under an incoming *large* enemy. */
@@ -817,14 +843,44 @@ export const WARDEN = {
   strafeSpeed: 0.9,
   /** Radians per second the strafe direction wanders. */
   strafeWanderRate: 0.35,
-  /** Seconds of lead applied when predicting the player's position. */
-  leadTime: 0.45,
+
+  // --- The shot: one straight yellow line, from the Warden to the player ------
+  //
+  // The attack is a *projectile on a fixed line*, not an area barrage. Three
+  // consequences are baked into the numbers below rather than into code:
+  //
+  //   1. **The line is aimed at the player's position at the instant it fires** and
+  //      its direction is then frozen (`WARDEN.shotSpeed` moves a point along it).
+  //      Nothing about the shot tracks the player afterwards, which is what makes
+  //      "step off the line" the counterplay — and it is why there is no lead
+  //      prediction any more: a line aimed at where the player *will* be is a line
+  //      that visibly misses where they *are*.
+  //   2. **Speed decides whether the dodge is a reaction or a coin flip.** The
+  //      Warden engages from 26 m, so 24 m/s gives the player about a second of
+  //      flight time to read the line and step aside — the same reaction budget the
+  //      1.35 s telegraph already spends, spent a second time on the dodge itself.
+  //   3. **The hit radius is what "on the path" means.** It is a sweep, not a point
+  //      sample: the shot tests the segment it covers this tick against the player's
+  //      hurtbox, so a fast shot cannot tunnel through a body between two ticks.
+
+  /** Height above the Warden's feet its shot leaves from, in metres. */
+  shotOriginHeight: 2.1,
+  /** Projectile speed, m/s. Constant along the whole line. */
+  shotSpeed: 24,
+  /** Hit radius of the shot against the player's hurtbox, in metres. */
+  shotRadius: 0.85,
+  /** Distance the shot travels before it is retired, in metres. */
+  shotRange: 70,
   /**
-   * Blasts whose impact point is cached at telegraph time. The player is
-   * expected to *move*, so the telegraph has to show where the shots are going,
-   * not where the player is.
+   * The attack's colour: **yellow**.
+   *
+   * The Warden's shot, its wind-up line and its impact flash are one colour so the
+   * three read as one attack, and it is deliberately not the orange of the player's
+   * impacts or the red of a Stalker's swing.
    */
-  telegraphLocksImpactPoints: true,
+  shotColour: 0xffd21f,
+  /** The hot core of that colour, for the glow ramp and the muzzle pop. */
+  shotGlowColour: 0xfff3a8,
 } as const;
 
 
@@ -1095,7 +1151,7 @@ export const AUDIO = {
    * Ceiling on simultaneously sounding voices.
    *
    * At 640 RPM the gun alone asks for 10.7 voices per second; with a pack of
-   * enemies, a barrage and an explosion on top, the peak is far above this. Past
+   * enemies, a Warden shot and an explosion on top, the peak is far above this. Past
    * the cap the lowest-priority request is dropped, which is what keeps an
    * explosion audible instead of being buried by gunfire.
    */
@@ -1116,7 +1172,7 @@ export const AUDIO = {
    * Priority at or above which a sound ducks the others.
    *
    * Data rather than a list of sound names, so "the explosion is the loudest thing
-   * in the game" is expressed once: the barrage impact (85), the Warden's death
+   * in the game" is expressed once: the Warden's shot impact (85), its death
    * (95) and the thrown item (100) all clear this bar, and nothing else does.
    */
   duckingPriority: 85,
@@ -1182,9 +1238,9 @@ export type SoundId =
   | 'hitHead'
   | 'playerHurt'
   | 'enemyTelegraphMelee'
-  | 'enemyTelegraphBarrage'
-  | 'barrageLock'
-  | 'barrageImpact'
+  | 'enemyTelegraphShot'
+  | 'enemyShotFired'
+  | 'enemyShotHit'
   | 'enemyDied'
   | 'bossDied'
   | 'spawnPending'
@@ -1206,11 +1262,11 @@ export type SoundId =
  * Read the numbers as "what does the player need to be able to tell apart". The
  * two that matter most are the *telegraph* family and the *notification* one:
  * `enemyTelegraphMelee` is a rising mid buzz (a reaction window, "something is
- * about to hit you"), `enemyTelegraphBarrage` is a two-tone low alarm ("this patch
- * of ground is about to hurt"), and `spawnPending` is a short bright blip ("note
+ * about to hit you"), `enemyTelegraphShot` is a two-tone low alarm ("a straight yellow
+ * line is about to come out of him"), and `spawnPending` is a short bright blip ("note
  * the direction something is arriving from"). The brief's readability budget is
  * spent on exactly those three being distinguishable with your eyes shut, and the
- * barrage one is deliberately the lowest and longest because the reaction window
+ * shot alarm is deliberately the lowest and longest because the reaction window
  * it announces is the longest.
  */
 export const SOUND_SPECS: Readonly<Record<SoundId, SoundSpec>> = {
@@ -1327,8 +1383,8 @@ export const SOUND_SPECS: Readonly<Record<SoundId, SoundSpec>> = {
     lowpass: 2600,
     noiseSeed: 0x5e6f70,
   },
-  /** Barrage wind-up: a low two-tone alarm. Must not sound like the melee cue. */
-  enemyTelegraphBarrage: {
+  /** The Warden's shot wind-up: a low two-tone alarm. Must not sound like the melee cue. */
+  enemyTelegraphShot: {
     bus: 'enemy',
     gain: 0.7,
     priority: 70,
@@ -1342,7 +1398,8 @@ export const SOUND_SPECS: Readonly<Record<SoundId, SoundSpec>> = {
     lowpass: 1400,
     noiseSeed: 0x6f7081,
   },
-  barrageImpact: {
+  /** The shot connecting with the player: the loudest thing the Warden does. */
+  enemyShotHit: {
     bus: 'world',
     gain: 0.8,
     priority: 85,
@@ -1357,16 +1414,15 @@ export const SOUND_SPECS: Readonly<Record<SoundId, SoundSpec>> = {
     noiseSeed: 0x708192,
   },
   /**
-   * The instant the barrage's impact points are locked and the ground markers go
-   * down: a short high tick.
+   * The instant the shot leaves the barrel: a short high tick.
    *
    * Three separate sounds describe one Warden attack, on purpose, because they are
    * three different pieces of information: the charge alarm says "he is committing",
-   * this says "the markers are down, move now", and `barrageImpact` says "that patch
-   * just went off". Collapsing any two of them would make the player unable to tell
-   * "brace" from "run".
+   * this says "it is in the air, get off the line", and `enemyShotHit` says "that
+   * line just went through me". Collapsing any two of them would make the player
+   * unable to tell "brace" from "run".
    */
-  barrageLock: {
+  enemyShotFired: {
     bus: 'enemy',
     gain: 0.55,
     priority: 75,

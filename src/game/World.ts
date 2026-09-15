@@ -95,7 +95,7 @@ export interface WorldStats {
   shotsFired: number;
   damageDealt: number;
   targetsKilled: number;
-  /** Enemy attacks that connected, melee and barrage alike. */
+  /** Enemy attacks that connected, melee and shot alike. */
   enemyHitsLanded: number;
   /** Damage the player has taken this life. */
   playerDamageTaken: number;
@@ -461,8 +461,10 @@ export function createWorld(options: WorldOptions): World {
   const resolveExplosions = (): void => {
     for (const blast of explosions) {
       // `ownerId: 0` because no enemy ever has id 0, so a player item never skips a
-      // target. The store's linear falloff, floor of 1 and outward knockback are
-      // shared with the Warden's barrage on purpose: one blast rule, one place.
+      // target. The item blast is the *only* user of this path now that the Warden fires a
+      // single-target line: the store's linear falloff, floor of 1 and outward knockback are
+      // the item's rules, and the Warden's shot bypasses them deliberately (the shot either
+      // crossed the player's body or it did not, with no falloff to compute).
       const hits = enemies.applyBlast({
         ownerId: 0,
         position: blast.position,

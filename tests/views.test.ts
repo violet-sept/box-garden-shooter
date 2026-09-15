@@ -1,6 +1,6 @@
 /**
- * Presentation-layer tests: enemy bodies, telegraph markers, damage vignette, and the
- * player's own body.
+ * Presentation-layer tests: enemy bodies, the Warden's attack indicators, damage vignette, and
+ * the player's own body.
  *
  * The rule is that `src/render/**` decides nothing, so there is deliberately very
  * little here to assert. What is left is the handful of properties that are
@@ -10,9 +10,9 @@
  *     frame" is the classic way a layer like this quietly starts allocating.
  *   - **A corpse plays out before its slot is reused.** An enemy that vanishes on
  *     the frame it dies reads as a despawn rather than as a kill.
- *   - **Markers are keyed by index against the simulation's array**, because that
- *     is the contract the composition root relies on when it rebuilds the marker
- *     list every frame instead of pushing events.
+ *   - **Indicators are keyed by index against the simulation's arrays**, because that
+ *     is the contract the composition root relies on when it rebuilds the line and
+ *     bolt lists every frame instead of pushing events.
  *   - **The player's body is turned and placed by the rig** (phase 6), which is the
  *     part that used to be four untestable lines inside `main.ts`.
  *
@@ -25,17 +25,16 @@ import { AnimationClip, BoxGeometry, Group, Mesh, MeshStandardMaterial, Object3D
 import { createEnemyView } from '#/render/models/enemyView';
 import { buildCharacter, createPlaceholderCharacter, type CharacterModel } from '#/render/models/CharacterLoader';
 import { createCharacterRig } from '#/render/models/characterRig';
-import { createTelegraphView } from '#/render/fx/telegraph';
+import { createTelegraphView, type AimLine, type ShotMarker } from '#/render/fx/telegraph';
 import { createHud, overlayVisibility, type HudElements } from '#/render/hud/hud';
 import { createWorld } from '#/game/World';
 import { createPlayerState } from '#/game/player/player';
 import { createWeaponState } from '#/game/player/weapon';
-import { ENEMY_ARCHETYPES, HEALTH_BAR, PLAYER, VIEW, WEAPON_MODEL } from '#/core/config';
+import { ENEMY_ARCHETYPES, HEALTH_BAR, PLAYER, VIEW, WARDEN, WEAPON_MODEL } from '#/core/config';
 import { DEG2RAD } from '#/core/math/vec3';
 import { EventBus } from '#/core/events';
 import type { EnemyState } from '#/game/enemies/EnemyState';
 import type { PlayerState } from '#/game/player/player';
-import type { ImpactMarker } from '#/render/fx/telegraph';
 
 /**
  * A handful of real enemies of both archetypes, spawned straight into a world.
@@ -391,63 +390,146 @@ describe('enemy view', () => {
   });
 });
 
-describe('telegraph view', () => {
-  /** One marker at a fixed spot, with a fuse that burns down. */
-  const marker = (fuse: number, radius = 3): ImpactMarker => ({
-    position: { x: 1, y: 0, z: -2 },
-    radius,
+describe('warden attack indicators', () => {
+  /** One warning line pointing at a fixed spot, with a fuse that burns down. */
+  const line = (fuse: number, length = 18): AimLine => ({
+    origin: { x: 0, y: 2, z: 0 },
+    // Pointing at +X so the geometry can be checked arithmetically.
+    direction: { x: 1, y: 0, z: 0 },
+    length,
     fuse,
     total: 1,
   });
 
-  it('maps markers to ground rings one for one', () => {
-    const view = createTelegraphView();
-    view.showBarrageMarkers([marker(1), marker(0.5), marker(0.2)]);
-    const visible = view.root.children.filter((child) => child.visible);
-    expect(visible.length).toBe(3);
-    // Every marker sits on the ground plane, never at its own y.
-    for (const child of visible) {
-      expect(child.position.y).toBe(0);
-    }
-    expect(visible[0]!.position.x).toBeCloseTo(1, 6);
-    expect(visible[0]!.position.z).toBeCloseTo(-2, 6);
-    expect(visible[0]!.scale.x).toBeCloseTo(3, 6);
+  /** One bolt at a fixed spot, travelling +X. */
+  const bolt = (x: number, trail = 0.4): ShotMarker => ({
+    position: { x, y: 2, z: 0 },
+    direction: { x: 1, y: 0, z: 0 },
+    trail,
   });
 
-  it('hides rings that are no longer reported', () => {
+  it('draws one warning line per Warden, spanning the solved line', () => {
     const view = createTelegraphView();
-    view.showBarrageMarkers([marker(1), marker(0.5), marker(0.2)]);
-    expect(view.root.children.filter((child) => child.visible).length).toBe(3);
-    view.showBarrageMarkers([marker(0.5)]);
+    view.showAimLines([line(1, 12), line(0.5, 9)]);
+    const visible = view.root.children.filter((child) => child.visible);
+    expect(visible).toHaveLength(2);
+    // The line runs from the muzzle to the far end: the *meshes* sit at the segment's midpoint
+    // with their local Z scaled to the whole length, which is what makes a single unit geometry
+    // serve every distance and every direction.
+    const beam = visible[0]!.children[0] as Mesh;
+    expect(beam.position.x).toBeCloseTo(6, 6);
+    expect(beam.position.y).toBeCloseTo(2, 6);
+    expect(beam.scale.z).toBeCloseTo(12, 6);
+    // The two meshes of one line are the same segment, so a wide beam and a thin core can
+    // never drift apart.
+    const core = visible[0]!.children[1] as Mesh;
+    expect(core.scale.z).toBeCloseTo(12, 6);
+  });
+
+  it('brightens the line as the fuse burns down', () => {
+    const view = createTelegraphView();
+    const opacity = (fuse: number): number => {
+      view.showAimLines([line(fuse)]);
+      const group = view.root.children.find((child) => child.visible);
+      const mesh = group?.children[0] as Mesh;
+      return (mesh.material as { opacity: number }).opacity;
+    };
+    // "How long have I got" has to be readable from the line itself. Measured at the two ends
+    // of the ramp, where the pulse cannot mask the trend.
+    expect(opacity(0)).toBeGreaterThan(opacity(1));
+  });
+
+  it('hides lines that are no longer reported', () => {
+    const view = createTelegraphView();
+    view.showAimLines([line(1), line(0.5)]);
+    expect(view.root.children.filter((child) => child.visible).length).toBe(2);
+    view.showAimLines([line(0.5)]);
     expect(view.root.children.filter((child) => child.visible).length).toBe(1);
-    view.showBarrageMarkers([]);
+    view.showAimLines([]);
     expect(view.root.children.filter((child) => child.visible).length).toBe(0);
   });
 
-  it('never exceeds its pool, however many Wardens are on field', () => {
+  it('draws a bolt as a head plus a tail that lags behind it', () => {
     const view = createTelegraphView();
-    const many: ImpactMarker[] = [];
-    for (let i = 0; i < 40; i += 1) many.push(marker(1, 2));
-    expect(() => view.showBarrageMarkers(many)).not.toThrow();
-    expect(view.root.children.length).toBeLessThanOrEqual(24);
+    view.showShots([bolt(10, 2)]);
+    const visible = view.root.children.filter((child) => child.visible);
+    // The head and the streak are two meshes; the streak is centred *behind* the head by
+    // half its length, which is what makes the bolt read as moving rather than as a dot.
+    expect(visible).toHaveLength(2);
+    const head = visible.find((child) => (child as Mesh).scale.z === 1) as Mesh;
+    const streak = visible.find((child) => (child as Mesh).scale.z > 1) as Mesh;
+    expect(head.position.x).toBeCloseTo(10, 6);
+    expect(streak.scale.z).toBeCloseTo(2, 6);
+    expect(streak.position.x).toBeCloseTo(9, 6);
+  });
+
+  it('keeps the tail for a moment after the shot is retired, then drops it', () => {
+    const view = createTelegraphView();
+    view.showShots([bolt(4)]);
+    // The simulation retires the shot (it hit something). The head goes at once; a tail that
+    // vanished on the same frame is a bolt popping out of existence mid-flight.
+    view.showShots([]);
+    expect(view.root.children.filter((child) => child.visible).length).toBe(1);
+    view.update(0.2);
+    expect(view.root.children.filter((child) => child.visible).length).toBe(0);
+  });
+
+  it('never exceeds its pools, however many Wardens are on field', () => {
+    const view = createTelegraphView();
+    const manyLines: AimLine[] = [];
+    const manyShots: ShotMarker[] = [];
+    for (let i = 0; i < 40; i += 1) {
+      manyLines.push(line(1, 4));
+      manyShots.push(bolt(i));
+    }
+    const pool = view.root.children.length;
+    expect(() => view.showAimLines(manyLines)).not.toThrow();
+    expect(() => view.showShots(manyShots)).not.toThrow();
+    expect(view.root.children.length).toBe(pool);
   });
 
   it('shows a detonation flash and then clears itself', () => {
     const view = createTelegraphView();
-    view.flash({ x: 4, y: 0, z: 4 }, 5);
+    view.flash({ x: 4, y: 2, z: 4 }, 5);
     const flashed = view.root.children.filter((child) => child.visible);
     expect(flashed.length).toBe(1);
+    // Airborne: the flash is drawn where the line ended, not projected onto the floor.
+    expect(flashed[0]!.position.y).toBeCloseTo(2, 6);
 
-    view.update(0.2);
+    view.update(0.1);
     expect(view.root.children.filter((child) => child.visible).length).toBe(1);
     // Well past the flash lifetime.
     view.update(1);
     expect(view.root.children.filter((child) => child.visible).length).toBe(0);
   });
 
-  it('clears both rings and flashes on demand', () => {
+  it('is painted in the configured yellow', () => {
+    // "The attack effect is yellow" is a requirement about the game, not a taste call in a
+    // renderer — so the colour is asserted as *yellow* (high red, high green, low blue) and
+    // the meshes are asserted to actually use it, rather than against a copied literal.
+    const colour = WARDEN.shotColour;
+    expect((colour >> 16) & 0xff).toBeGreaterThan(200);
+    expect((colour >> 8) & 0xff).toBeGreaterThan(150);
+    expect(colour & 0xff).toBeLessThan(120);
+
     const view = createTelegraphView();
-    view.showBarrageMarkers([marker(1)]);
+    view.showAimLines([line(1)]);
+    view.showShots([bolt(3)]);
+    const colours = new Set<number>();
+    view.root.traverse((object) => {
+      const mesh = object as Mesh;
+      if (!mesh.isMesh) return;
+      const material = mesh.material as { color?: { getHex(): number } };
+      colours.add(material.color?.getHex() ?? 0);
+    });
+    expect(colours.has(WARDEN.shotColour)).toBe(true);
+    expect(colours.has(WARDEN.shotGlowColour)).toBe(true);
+  });
+
+  it('clears lines, bolts and flashes on demand', () => {
+    const view = createTelegraphView();
+    view.showAimLines([line(1)]);
+    view.showShots([bolt(2)]);
     view.flash({ x: 0, y: 0, z: 0 }, 3);
     view.clear();
     expect(view.root.children.filter((child) => child.visible).length).toBe(0);
@@ -511,6 +593,53 @@ function fakeHudElements(): HudElements {
 }
 
 describe('HUD layer state', () => {
+  /**
+   * A minimal `HudView` for the wiring tests.
+   *
+   * The HUD is the one presentation module that decides something the player acts on — which
+   * reticle is on screen — so its class toggles are asserted rather than assumed. Everything
+   * else here is a number the HUD only formats.
+   */
+  function hudView(overrides: Partial<Parameters<ReturnType<typeof createHud>['update']>[0]> = {}) {
+    return {
+      weapon: createWeaponState(1),
+      health: 150,
+      maxHealth: 150,
+      charges: 3,
+      spreadDeg: 3.4,
+      fovDeg: PLAYER.fovHip,
+      adsProgress: 0,
+      viewportHeight: 900,
+      metrics: { fps: 60, tps: 60, stepMs: 1, renderMs: 1, stepsLastFrame: 1, droppedStepFrames: 0 },
+      bannerRemaining: 0,
+      enemiesAlive: 0,
+      dead: false,
+      wave: 1,
+      totalWaves: 8,
+      seed: 1,
+      ...overrides,
+    };
+  }
+
+  it('swaps the reticle to its aimed styling exactly while aiming', () => {
+    const elements = fakeHudElements();
+    const hud = createHud(elements);
+
+    hud.update(hudView({ adsProgress: 0 }));
+    expect(elements.crosshair.classList.contains('ads')).toBe(false);
+
+    // Mid-transition is not yet "aiming": the class is the *state*, the growing radius is the
+    // transition, and mixing the two would light the aimed ring up 0.1 s early.
+    hud.update(hudView({ adsProgress: 0.5 }));
+    expect(elements.crosshair.classList.contains('ads')).toBe(false);
+
+    hud.update(hudView({ adsProgress: 1 }));
+    expect(elements.crosshair.classList.contains('ads')).toBe(true);
+
+    hud.update(hudView({ adsProgress: 0 }));
+    expect(elements.crosshair.classList.contains('ads')).toBe(false);
+  });
+
   it('ships each overlay and the HUD as exact opposites, in both directions', () => {
     const elements = fakeHudElements();
     const hud = createHud(elements);

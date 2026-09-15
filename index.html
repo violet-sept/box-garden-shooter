@@ -273,6 +273,18 @@
         border: 1px solid rgba(233, 242, 255, 0.22);
         border-radius: 50%;
       }
+      /* The aimed reticle.
+         Size alone is carried by `--spread` (the HUD writes a bigger radius while aiming); this
+         is the second channel — a thicker ring in the accent colour — so "I am aiming" reads at
+         a glance on a busy screen rather than only on close inspection. */
+      #crosshair.ads {
+        border-width: 2px;
+        border-color: rgba(111, 211, 255, 0.9);
+        box-shadow: 0 0 14px rgba(111, 211, 255, 0.3);
+      }
+      #crosshair.ads::before {
+        border-color: rgba(111, 211, 255, 0.4);
+      }
 
       /* --- Bottom-left: health + charges ---------------------------------- */
       #vitals {

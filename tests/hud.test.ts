@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   chargesEmpty,
+  crosshairAiming,
   crosshairRadius,
   formatAmmo,
   formatHealth,
@@ -18,7 +19,7 @@ import {
   type OverlayMode,
 } from '#/render/hud/hud';
 import { CHANNEL_TOLERANCE_FRAMES, createHitLog } from '#/debug/hitlog';
-import { PLAYER, SIM, WEAPON } from '#/core/config';
+import { CROSSHAIR, PLAYER, SIM, WEAPON } from '#/core/config';
 import { createWeaponState } from '#/game/player/weapon';
 import type { GameEvents } from '#/core/events';
 
@@ -73,6 +74,59 @@ describe('HUD formatting', () => {
       crosshairRadius(1, PLAYER.fovHip, 900) * 2,
       6,
     );
+  });
+
+  it('grows the reticle when the player aims', () => {
+    // The requirement in one assertion. Note that the *spread* projection goes the other way
+    // (0.35° at 45° FOV is a dot), which is exactly why the aimed ring is a configured sight
+    // rather than a projection: `crosshairRadius(spreadAdsDeg, fovAds)` is smaller than hip
+    // fire, and the aimed reticle must not be.
+    const hip = crosshairRadius(WEAPON.spreadHipDeg, PLAYER.fovHip, 900, 0);
+    const aimed = crosshairRadius(WEAPON.spreadAdsDeg, PLAYER.fovAds, 900, 1);
+    expect(aimed).toBeGreaterThan(hip);
+    expect(aimed).toBeCloseTo(CROSSHAIR.adsRadiusPx, 6);
+
+    // Walk the transition the weapon actually produces — cone and FOV both lerped by the same
+    // blend — and require the reticle to grow without ever dipping. A straight blend of the
+    // *live* projection to the aimed ring would shrink first (the cone collapses inside the
+    // 0.18 s transition) and grow afterwards, which reads as a glitch on every right-click.
+    const half = crosshairRadius(
+      (WEAPON.spreadHipDeg + WEAPON.spreadAdsDeg) / 2,
+      (PLAYER.fovHip + PLAYER.fovAds) / 2,
+      900,
+      0.5,
+    );
+    expect(half).toBeGreaterThan(hip);
+    expect(half).toBeLessThan(aimed);
+
+    let previous = 0;
+    for (let step = 0; step <= 1.0001; step += 0.05) {
+      const spread = WEAPON.spreadHipDeg + (WEAPON.spreadAdsDeg - WEAPON.spreadHipDeg) * step;
+      const fov = PLAYER.fovHip + (PLAYER.fovAds - PLAYER.fovHip) * step;
+      const radius = crosshairRadius(spread, fov, 900, step);
+      expect(radius, `step ${step.toFixed(2)}`).toBeGreaterThanOrEqual(previous);
+      expect(radius, `step ${step.toFixed(2)}`).toBeGreaterThanOrEqual(hip - 1e-9);
+      previous = radius;
+    }
+  });
+
+  it('still lets a bloomed cone open the ring while aiming', () => {
+    // The aimed ring is a sight, not a spread *replacement*: firing while aimed still has to
+    // show the cone opening up.
+    const bloomed = crosshairRadius(WEAPON.spreadMaxDeg, PLAYER.fovAds, 900, 1);
+    expect(bloomed).toBeGreaterThan(CROSSHAIR.adsRadiusPx);
+  });
+
+  it('never shrinks the reticle below the hip-fire floor while aiming', () => {
+    // A wide viewport, a fully bloomed cone, an unset blend: the reticle is still a reticle.
+    expect(crosshairRadius(0, PLAYER.fovAds, 200)).toBe(CROSSHAIR.minRadiusPx);
+    expect(crosshairRadius(WEAPON.spreadMaxDeg, PLAYER.fovHip, 900, 0)).toBeGreaterThan(0);
+  });
+
+  it('treats full ADS as the only "aiming" state, matching the weapon', () => {
+    expect(crosshairAiming(0)).toBe(false);
+    expect(crosshairAiming(0.99)).toBe(false);
+    expect(crosshairAiming(1)).toBe(true);
   });
 });
 

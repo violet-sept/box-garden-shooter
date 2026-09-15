@@ -161,8 +161,14 @@ export class InputState {
     window.addEventListener('blur', this.handleBlur);
     canvas.addEventListener('mousedown', this.handleMouseDown);
     window.addEventListener('mouseup', this.handleMouseUp);
-    // `contextmenu` must be suppressed or right-click ADS opens the OS menu.
-    canvas.addEventListener('contextmenu', this.handleContextMenu);
+    // The browser's own context menu must never appear over the game: right-click is ADS, and
+    // a menu that opens on the same gesture is the game "affecting the browser".
+    //
+    // It is bound to `document` rather than to the canvas on purpose. `contextmenu` targets
+    // whatever is under the cursor, so a canvas-only listener still lets the menu through
+    // whenever a HUD overlay or the pause panel is the top element — and with the pointer
+    // *unlocked* (title screen, pause, results) that is every case the player can hit.
+    document.addEventListener('contextmenu', this.handleContextMenu);
     document.addEventListener('pointerlockchange', this.handlePointerLockChange);
     document.addEventListener('pointerlockerror', this.handlePointerLockError);
     document.addEventListener('mousemove', this.handleMouseMove);
@@ -242,7 +248,7 @@ export class InputState {
     window.removeEventListener('blur', this.handleBlur);
     this.canvas.removeEventListener('mousedown', this.handleMouseDown);
     window.removeEventListener('mouseup', this.handleMouseUp);
-    this.canvas.removeEventListener('contextmenu', this.handleContextMenu);
+    document.removeEventListener('contextmenu', this.handleContextMenu);
     document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
     document.removeEventListener('pointerlockerror', this.handlePointerLockError);
     document.removeEventListener('mousemove', this.handleMouseMove);
@@ -292,6 +298,18 @@ export class InputState {
     this.buttons.delete(event.button);
   };
 
+  /**
+   * Swallows the browser's context menu for the whole page.
+   *
+   * Right-click means "aim down sights" here, so the OS menu on the same button is not a
+   * nuisance — it is the game leaking out of its own window. Suppressing it globally (rather
+   * than on the canvas) also covers the overlays: the pointer is *unlocked* on the title
+   * screen and in the pause panel, so a right-click there would otherwise open a menu over
+   * the game.
+   *
+   * The ADS itself is unaffected: `handleMouseDown` still ignores every button while the
+   * pointer is not locked, so outside play the gesture does nothing at all.
+   */
   private readonly handleContextMenu = (event: MouseEvent): void => {
     event.preventDefault();
   };

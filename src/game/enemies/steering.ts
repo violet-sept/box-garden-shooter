@@ -187,27 +187,5 @@ export function keepDistance(
   return out;
 }
 
-/**
- * Predicts where a moving target will be after `leadTime` seconds.
- *
- * The Warden aims at this point rather than at the player's current position, so
- * a player who is running is punished for running *predictably* — which is the
- * whole reason the barrage is dodgeable at all. Clamped to the horizontal plane:
- * a barrage does not lead vertically, and the blast is a ground-anchored area.
- */
-export function leadTarget(
-  out: Vector3,
-  target: Vector3,
-  targetVelocity: Vector3,
-  leadTime: number,
-): Vector3 {
-  return set(
-    out,
-    target.x + targetVelocity.x * leadTime,
-    target.y,
-    target.z + targetVelocity.z * leadTime,
-  );
-}
-
 /** Horizontal distance, re-exported so enemy modules do not reach past this one. */
 export { distanceXZ };

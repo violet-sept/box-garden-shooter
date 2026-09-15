@@ -183,6 +183,57 @@ export function sphereIntersectsAabb(center: Vector3, radius: number, box: Aabb)
 }
 
 /**
+ * Overlap test between a moving point's **swept segment** and an axis-aligned box.
+ *
+ * This is the primitive the Warden's shot uses, and the reason it is a segment rather
+ * than a point is tunnelling: at 24 m/s a shot covers 0.4 m per 60 Hz tick, so testing
+ * "is the projectile inside the player now" would let it pass clean through a body
+ * between two ticks — the classic fast-projectile miss, and one the player would read as
+ * "that clearly went through me and nothing happened".
+ *
+ * The parameters are the two ends of the tick's travel rather than an origin and a
+ * direction, because that is what the caller has and it keeps the tolerance explicit:
+ * `t ∈ [0, 1]` is exactly "during this tick". Starting inside the box counts as a hit,
+ * which is what makes the test symmetric with {@link sphereIntersectsAabb}.
+ *
+ * Allocation-free and NaN-tolerant in the same way {@link rayAabb} is.
+ */
+export function segmentIntersectsAabb(from: Vector3, to: Vector3, box: Aabb): boolean {
+  let tMin = 0;
+  let tMax = 1;
+
+  for (let axis = 0; axis < 3; axis += 1) {
+    const o = axis === 0 ? from.x : axis === 1 ? from.y : from.z;
+    const d = axis === 0 ? to.x - from.x : axis === 1 ? to.y - from.y : to.z - from.z;
+    const c = axis === 0 ? box.center.x : axis === 1 ? box.center.y : box.center.z;
+    const h = axis === 0 ? box.halfExtents.x : axis === 1 ? box.halfExtents.y : box.halfExtents.z;
+
+    const lo = c - h;
+    const hi = c + h;
+
+    if (Math.abs(d) < 1e-9) {
+      // Parallel to this slab: the segment stays inside the band or it can never enter it.
+      if (o < lo || o > hi) return false;
+      continue;
+    }
+
+    const inv = 1 / d;
+    let first = (lo - o) * inv;
+    let second = (hi - o) * inv;
+    if (first > second) {
+      const swap = first;
+      first = second;
+      second = swap;
+    }
+    if (first > tMin) tMin = first;
+    if (second < tMax) tMax = second;
+    if (tMin > tMax) return false;
+  }
+
+  return true;
+}
+
+/**
  * Resolves a vertical capsule out of a box and reports the correction.
  *
  * Separating-axis-lite: the shallowest of the three axis overlaps is the one
