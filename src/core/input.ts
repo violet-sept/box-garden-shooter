@@ -92,11 +92,10 @@ const CODE_TO_ACTION: ReadonlyMap<string, keyof typeof BINDINGS> = new Map(
 /**
  * Owns the pointer-lock session and accumulates input between ticks.
  *
- * Usage per frame:
+ * Usage per simulation step:
  * ```ts
- * input.update();               // fold queued look deltas into this tick
- * const intent = input.sample(); // read the intent
- * input.endTick();              // clear one-shot edges
+ * const intent = input.sample(); // read the intent, mouse motion included
+ * input.endTick();              // consume the edges and that motion
  * ```
  */
 export class InputState {
@@ -104,10 +103,19 @@ export class InputState {
   /** Actions whose press event arrived since the last `endTick`. */
   private readonly pressedEdges = new Set<keyof typeof BINDINGS>();
 
+  /**
+   * Mouse motion accumulated since the last `endTick`, in pixels.
+   *
+   * Read — and only ever read — by {@link sample}. There used to be a separate
+   * `update()` that copied this pair into a per-tick pair, and the composition root
+   * never called it: **the camera could not be turned with the mouse at all**, for the
+   * whole life of the build, while every unit test passed because they called
+   * `update()` themselves. Folding it here means there is exactly one way to obtain an
+   * intent and it always carries the motion — the mistake is no longer expressible.
+   * See technical plan §5.16.
+   */
   private pendingLookX = 0;
   private pendingLookY = 0;
-  private tickLookX = 0;
-  private tickLookY = 0;
 
   private locked = false;
   private disposed = false;
@@ -166,17 +174,12 @@ export class InputState {
   }
 
   /**
-   * Folds accumulated mouse movement into the tick being simulated.
-   * Call once per simulation step, before {@link sample}.
+   * Reads the current intent. Clears nothing; {@link endTick} consumes.
+   *
+   * It also carries the mouse motion accumulated since the last tick — that fold used
+   * to be a separate `update()` the composition root had to remember to call, and it
+   * did not. See `pendingLookX`.
    */
-  update(): void {
-    this.tickLookX = this.pendingLookX;
-    this.tickLookY = this.pendingLookY;
-    this.pendingLookX = 0;
-    this.pendingLookY = 0;
-  }
-
-  /** Reads the current intent. Does not clear anything. */
   sample(): InputIntent {
     return {
       move: {
@@ -193,8 +196,10 @@ export class InputState {
       // when a frame runs several steps.
       reload: this.pressedEdges.has('reload'),
       throwItem: this.pressedEdges.has('throwItem'),
-      lookDeltaX: this.tickLookX,
-      lookDeltaY: this.tickLookY,
+      // Read from the accumulator, not from a per-tick copy: the whole tick's motion
+      // belongs to the tick that is about to be simulated, and `endTick` consumes it.
+      lookDeltaX: this.pendingLookX,
+      lookDeltaY: this.pendingLookY,
     };
   }
 
@@ -203,11 +208,10 @@ export class InputState {
     return this.pressedEdges.has(action);
   }
 
-  /** Clears one-shot edges and the per-tick look delta. Call after the tick. */
+  /** Consumes the one-shot edges and the mouse motion they were read with. */
   endTick(): void {
     this.pressedEdges.clear();
-    this.tickLookX = 0;
-    this.tickLookY = 0;
+    this.dropLook();
   }
 
   /** Removes every listener. Safe to call more than once. */
@@ -253,6 +257,7 @@ export class InputState {
   private readonly handleBlur = (): void => {
     this.held.clear();
     this.buttons.clear();
+    this.dropLook();
   };
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
@@ -281,11 +286,25 @@ export class InputState {
   private readonly handlePointerLockChange = (): void => {
     this.locked = document.pointerLockElement === this.canvas;
     // Held state is meaningless across a lock boundary, and a stuck fire button
-    // after an Esc-then-Esc sequence is a classic bug.
+    // after an Esc-then-Esc sequence is a classic bug. The same goes for motion that
+    // arrived just before the boundary: it belongs to the session that just ended.
     this.held.clear();
     this.buttons.clear();
+    this.dropLook();
     this.onLockChange?.(this.locked);
   };
+
+  /**
+   * Discards motion that has been accumulated but not yet read.
+   *
+   * Called at the two boundaries where accumulated state is meaningless — focus loss and a
+   * pointer-lock change — so a flick that happened in the last instant of a session cannot
+   * be applied to the first tick of the next one.
+   */
+  private dropLook(): void {
+    this.pendingLookX = 0;
+    this.pendingLookY = 0;
+  }
 
   /** Some engines report a refusal only through this event, with no reason attached. */
   private readonly handlePointerLockError = (): void => {

@@ -1,15 +1,20 @@
 /**
- * Input layer: the pointer-lock failure path.
+ * Input layer: the pointer-lock failure path, and mouse look.
  *
- * The rest of `InputState` is a straight mapping from DOM events to an intent snapshot,
- * and the world tests drive that end to end. What is pinned here is the one thing they
- * cannot see: a **refused** pointer lock.
+ * Two things are pinned here, and both of them are *wiring* rather than arithmetic,
+ * which is why nothing else in the suite covers them:
  *
- * Nothing on screen changes when a lock is refused. The veil is static markup, so the
- * page simply sits there ignoring clicks — which is also exactly what a page whose
- * script never executed looks like. Before `onLockError` existed, the rejected promise
- * was discarded inside `requestLock`, so the game was dead with no symptom a player
- * could report and no picture an assertion could read (technical plan §5.13).
+ *   - a **refused** pointer lock. Nothing on screen changes when a lock is refused: the
+ *     veil is static markup, so the page simply sits there ignoring clicks — which is
+ *     also exactly what a page whose script never executed looks like. Before
+ *     `onLockError` existed, the rejected promise was discarded inside `requestLock`, so
+ *     the game was dead with no symptom a player could report and no picture an assertion
+ *     could read (technical plan §5.13).
+ *   - **mouse look reaching the simulation**. `InputState` accumulated the motion and then
+ *     required the caller to fold it in with `update()`; the composition root never called
+ *     it, so the camera could not be turned at all. The tests that existed called
+ *     `update()` themselves, which is precisely how a method only the tests call keeps
+ *     passing. See technical plan §5.16.
  *
  * `window` and `document` are stubbed per test and restored afterwards, following the
  * `globalThis.location` precedent in `perf.test.ts`.
@@ -195,5 +200,115 @@ describe('describeLockFailure', () => {
   it('describes a rejection that is not an Error at all', () => {
     expect(describeLockFailure(undefined)).toBe('undefined');
     expect(describeLockFailure({ code: 5 })).toContain('object');
+  });
+});
+
+/**
+ * Mouse look.
+ *
+ * This is the wiring side of the look input, and it is tested here because it shipped
+ * broken in a way nothing else could see: `InputState` had an `update()` that folded the
+ * accumulated motion into the tick, and the composition root never called it — so the
+ * camera could not be turned with the mouse **at all**, while every unit test passed,
+ * because the tests called `update()` themselves.
+ *
+ * The assertions below are therefore written as "one read, no other call in between". If
+ * the fold ever moves back out of `sample()`, this goes red instead of the game.
+ */
+describe('mouse look', () => {
+  let windowStub: ReturnType<typeof makeTarget>;
+  let documentStub: ReturnType<typeof makeTarget> & { pointerLockElement: unknown };
+  let savedWindow: PropertyDescriptor | undefined;
+  let savedDocument: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    windowStub = makeTarget();
+    documentStub = Object.assign(makeTarget(), { pointerLockElement: null });
+    savedWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    savedDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'window', { value: windowStub, configurable: true, writable: true });
+    Object.defineProperty(globalThis, 'document', { value: documentStub, configurable: true, writable: true });
+  });
+
+  afterEach(() => {
+    if (savedWindow) Object.defineProperty(globalThis, 'window', savedWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+    if (savedDocument) Object.defineProperty(globalThis, 'document', savedDocument);
+    else Reflect.deleteProperty(globalThis, 'document');
+  });
+
+  /** An input whose pointer is already locked, which is the state a player plays in. */
+  function locked(): InputState {
+    const canvas = makeCanvas(() => undefined);
+    const input = new InputState(canvas);
+    documentStub.pointerLockElement = canvas;
+    documentStub.fire('pointerlockchange');
+    expect(input.isLocked).toBe(true);
+    return input;
+  }
+
+  it('carries a mouse move into the next intent with no other call in between', () => {
+    const input = locked();
+    documentStub.fire('mousemove', { movementX: 12, movementY: -4 });
+
+    const intent = input.sample();
+
+    expect(intent.lookDeltaX).toBe(12);
+    expect(intent.lookDeltaY).toBe(-4);
+  });
+
+  it('sums every move that arrived during the tick', () => {
+    const input = locked();
+    documentStub.fire('mousemove', { movementX: 3, movementY: 1 });
+    documentStub.fire('mousemove', { movementX: 4, movementY: 2 });
+    documentStub.fire('mousemove', { movementX: -1, movementY: 0 });
+
+    const intent = input.sample();
+
+    expect(intent.lookDeltaX).toBe(6);
+    expect(intent.lookDeltaY).toBe(3);
+  });
+
+  it('hands one flick to exactly one tick', () => {
+    const input = locked();
+    documentStub.fire('mousemove', { movementX: 40, movementY: 0 });
+
+    // Reading twice inside the same tick gives the same answer: the motion is not
+    // consumed by a read, it is consumed by the tick ending.
+    expect(input.sample().lookDeltaX).toBe(40);
+    expect(input.sample().lookDeltaX).toBe(40);
+
+    input.endTick();
+
+    // The next tick must not turn again — a leak here is a camera that keeps spinning
+    // for as long as the player holds the mouse still.
+    expect(input.sample().lookDeltaX).toBe(0);
+    expect(input.sample().lookDeltaY).toBe(0);
+  });
+
+  it('ignores the mouse entirely while the pointer is not locked', () => {
+    const input = new InputState(makeCanvas(() => undefined));
+    documentStub.fire('mousemove', { movementX: 99, movementY: 99 });
+
+    const intent = input.sample();
+
+    expect(intent.lookDeltaX).toBe(0);
+    expect(intent.lookDeltaY).toBe(0);
+  });
+
+  it('drops motion that was still in flight when the lock ended', () => {
+    // Esc during a flick: the pixels gathered before the boundary belong to the session that
+    // just ended. Applying them to the next run would be a camera that jumps on re-entry.
+    const canvas = makeCanvas(() => undefined);
+    const input = new InputState(canvas);
+    documentStub.pointerLockElement = canvas;
+    documentStub.fire('pointerlockchange');
+    documentStub.fire('mousemove', { movementX: 25, movementY: -9 });
+
+    documentStub.pointerLockElement = null;
+    documentStub.fire('pointerlockchange');
+
+    expect(input.sample().lookDeltaX).toBe(0);
+    expect(input.sample().lookDeltaY).toBe(0);
   });
 });

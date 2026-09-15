@@ -187,14 +187,39 @@ describe('missing-clip degradation', () => {
     const all = [new AnimationClip('idle', 1, []), new AnimationClip('death', 1, [])];
     const { root } = standIn(1.75);
     const model = buildCharacter(root, all, 1.75, () => {});
-    // Nothing observable from outside except that it does not throw, but the
-    // transition is the documented contract: once dying, other states are ignored.
     model.play('death');
-    expect(() => {
-      model.play('run');
-      model.play('idle');
-      model.update(0.016);
-    }).not.toThrow();
+    // The hold is the documented contract: once dying, other states are ignored — which is
+    // why the restart path has to call `reset` rather than just asking for `idle`.
+    model.play('run');
+    model.play('idle');
+    expect(model.state).toBe('death');
+    model.update(0.016);
+  });
+
+  it('comes back off the floor when the run is restarted', () => {
+    // Without this, clicking to restart after a death begins the next run with a body
+    // lying in the arena — the model holds the death clip and refuses every other state.
+    const all = [new AnimationClip('idle', 1, []), new AnimationClip('death', 1, []), new AnimationClip('run', 1, [])];
+    const { root } = standIn(1.75);
+    const model = buildCharacter(root, all, 1.75, () => {});
+    model.play('death');
+    expect(model.state).toBe('death');
+
+    model.reset();
+    model.play('run');
+
+    expect(model.state).toBe('run');
+    expect(() => model.update(0.016)).not.toThrow();
+  });
+
+  it('writes the body rotation in yaw-then-lean order on both paths', () => {
+    // The turn writes `rotation.y` (facing) and `rotation.z` (the lean into the pivot); the
+    // order they compose in has to match the camera's, on the loaded model and on the
+    // stand-in alike.
+    const { root } = standIn(1.75);
+    const loaded = buildCharacter(root, [], 1.75, () => {});
+    expect(loaded.root.rotation.order).toBe('YXZ');
+    expect(createPlaceholderCharacter(1.75).root.rotation.order).toBe('YXZ');
   });
 });
 
@@ -217,7 +242,25 @@ describe('placeholder stand-in', () => {
     expect(() => {
       model.play('run');
       model.update(0.016);
+      model.reset();
       model.dispose();
     }).not.toThrow();
+    expect(model.state).toBeNull();
+  });
+
+  it('has a front, or the body could not be seen to turn', () => {
+    // A bare capsule is rotationally symmetric, so every yaw the turn applies would be
+    // invisible — and this stand-in is what ships until the art does. The cue has to be on
+    // the model's `+Z`, which is the direction the composition root rotates to face forward.
+    const model = createPlaceholderCharacter(1.75);
+    const meshes = meshesOf(model.root);
+    expect(meshes.length).toBeGreaterThan(1);
+
+    const front = meshes.filter((mesh) => mesh.position.z > 0);
+    expect(front.length).toBeGreaterThan(0);
+    for (const mesh of front) {
+      expect(mesh.layers.isEnabled(LAYER_DEFAULT)).toBe(true);
+      expect(mesh.layers.isEnabled(LAYER_HITTABLE)).toBe(false);
+    }
   });
 });

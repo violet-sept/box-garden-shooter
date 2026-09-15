@@ -59,9 +59,8 @@ import {
   loadCharacter,
   PLAYER_MODEL_HEIGHT,
   PLAYER_MODEL_URL,
-  type CharacterModel,
-  type CharacterState,
 } from '@/render/models/CharacterLoader';
+import { createCharacterRig, type CharacterRig } from '@/render/models/characterRig';
 import { barrageRadius } from '@/game/enemies/largeWarden';
 import { createHud, type HudElements } from '@/render/hud/hud';
 import { createHitLog } from '@/debug/hitlog';
@@ -233,7 +232,7 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
   scene.add(throwable.root);
 
   /**
-   * The player's body.
+   * The player's body, and the rig that places and turns it.
    *
    * Loaded **after** the first frame is already scheduled, so a slow or missing
    * asset can never delay boot: `loadCharacter` resolves to a procedural stand-in
@@ -241,18 +240,16 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
    * the whole "drop the .glb in and it works with no code change" contract, and it
    * is why nothing above this line awaits anything.
    */
-  let character: CharacterModel | null = null;
+  let character: CharacterRig | null = null;
   /** Set by `dispose()` so a load that lands after teardown is not leaked. */
   let disposed = false;
-  /** Last locomotion state handed to `character.play`, so a crossfade is asked once. */
-  let characterState: CharacterState | null = null;
 
   void loadCharacter(PLAYER_MODEL_URL, { height: PLAYER_MODEL_HEIGHT }).then((loaded) => {
     if (disposed) {
       loaded.dispose();
       return;
     }
-    character = loaded;
+    character = createCharacterRig(loaded);
     scene.add(loaded.root);
   });
 
@@ -439,40 +436,15 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
   };
 
   /**
-   * Which animation state the player's body should be in.
-   *
-   * The clip is chosen from the simulation's own velocity rather than from the
-   * input intent: a player pressed against a crate is holding `W` and not moving,
-   * and "running on the spot against a wall" is the classic tell that the renderer
-   * was asked about the keyboard instead of about the world.
-   */
-  const characterStateFor = (): CharacterState => {
-    if (world.player.dead) return 'death';
-    if (world.player.weapon.mode === 'reloading') return 'reload';
-    const speed = Math.hypot(world.player.velocity.x, world.player.velocity.z);
-    if (speed < 0.15) return 'idle';
-    return speed > PLAYER.walkSpeed * 1.05 ? 'run' : 'walk';
-  };
-
-  /**
    * Places and animates the player's body.
    *
-   * Rotation is `yaw + PI` because the character model's brief specifies that it
-   * faces `+Z` while the simulation's yaw zero points down `-Z`. Getting this wrong
-   * is the "the character moonwalks everywhere" bug, and it is invisible in a
-   * screenshot of a standing player.
+   * All of it now lives in `render/models/characterRig.ts` — the position, the turn toward
+   * the direction of travel, the lean into that turn and the clip choice. It is a module
+   * rather than four lines here because each of those is a presentation rule that needs to
+   * be assertable without a canvas; see that file's header.
    */
   const syncCharacter = (dt: number): void => {
-    if (!character) return;
-    const player = world.player;
-    character.root.position.set(player.position.x, player.position.y, player.position.z);
-    character.root.rotation.y = player.yaw + Math.PI;
-    const state = characterStateFor();
-    if (state !== characterState) {
-      character.play(state);
-      characterState = state;
-    }
-    character.update(dt);
+    character?.sync(world.player, dt);
   };
 
   const hooks: LoopHooks = {
@@ -658,6 +630,11 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
     throwable.clear();
     effects.setMuzzle(muzzleScratch, aimScratch, false);
     enemyView.update(world.enemies.targets, 0, 0);
+    // The body is snapped rather than turned to the spawn facing: on a restart the character
+    // is placed, not walked there, and a quarter-second pivot out of the death pose would
+    // read as the loop starting late. It is also told the run is over, or the new one begins
+    // with a corpse standing in the arena.
+    character?.reset(world.player.yaw);
     runOver = false;
     results.title = '箱庭射击';
     results.detail = '';
@@ -820,7 +797,7 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
       mixer.dispose();
       effects.dispose();
       hud.dispose();
-      character?.dispose();
+      character?.model.dispose();
       enemyView.dispose();
       telegraph.dispose();
       spawnWarnings.dispose();

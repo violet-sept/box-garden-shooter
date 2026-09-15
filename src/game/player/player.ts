@@ -83,20 +83,25 @@ export interface CollisionWorld {
 /**
  * Splits level geometry into the lists the controller actually wants.
  *
- * The ground slab is excluded from `obstacles` on purpose: it is coplanar with the
+ * The floor slab is excluded from `obstacles` on purpose: it is coplanar with the
  * player's feet, so feeding it to the penetration solver would eject the player
  * upward every tick. Floors are handled by an exact downward ray instead, which is
  * both cheaper and more accurate for step-up. Fences stay in: they are
  * full-height obstacles that exist precisely to stop horizontal movement.
+ *
+ * The test for "is this the floor" is **"is its top at or below the feet"**, not
+ * "is it the ground prop": that is the property the solver actually needs, and it keeps
+ * being right for anything buried in the slab. It is also what lets this function read
+ * `level.collisionBoxes` — the one authoring list, built from `props` *and* the decorative
+ * pieces — instead of re-deriving a second, subtly different one from `props` alone. The
+ * two derivations were equal until decorations became solid, at which point only one of
+ * them would have known it.
  */
 export function createCollisionWorld(level: LevelData): CollisionWorld {
   const obstacles: Aabb[] = [];
-  for (const prop of level.props) {
-    if (!prop.solid || prop.kind === 'ground') continue;
-    obstacles.push({
-      center: prop.position,
-      halfExtents: { x: prop.size.x / 2, y: prop.size.y / 2, z: prop.size.z / 2 },
-    });
+  for (const box of level.collisionBoxes) {
+    if (box.center.y + box.halfExtents.y <= 0) continue;
+    obstacles.push(box);
   }
   return { obstacles, solids: level.blockers, halfSize: level.halfSize };
 }

@@ -18,7 +18,7 @@
  */
 
 import { createRng, seedFromString } from '../core/math/rng';
-import { type Aabb, type Vector3 } from '../core/math/vec3';
+import { type Aabb, type Vector3, DEG2RAD } from '../core/math/vec3';
 
 /** Surface family. Drives material colour and the impact effect that spawns. */
 export type PropKind =
@@ -48,15 +48,163 @@ export interface Prop {
   readonly blocksShots: boolean;
 }
 
-/** A ring of lamp posts or similar purely decorative geometry. */
+/**
+ * A lamp post, a mast, a stack of crates or a run of pipes.
+ *
+ * ## These are solid (phase 6)
+ *
+ * The channel was introduced in phase 4 for "look at it, never collide with it", and this
+ * comment used to say so. It does not any more: walking through a lamp post, a crate stack
+ * or a waist-high pipe run is the thing players report as a bug, and "it is only decor" is
+ * not an answer they can see. Every piece now has a physical body, derived from the same
+ * dimensions the mesh is built from — see {@link DECOR_SPECS} and
+ * {@link decorCollisionBoxes}.
+ *
+ * What survives from the original contract is the reason the channel existed at all:
+ * `props` derives the meshes, the movement boxes **and** the shot blockers at once, so
+ * moving a crate in `props` silently rewrites the playable space. `decor` is where the
+ * pieces that are *placed from a list* live, and it now derives exactly the same three
+ * things from a single dimension table rather than leaving two of them out.
+ */
 export interface Decor {
-  readonly kind: 'lamp' | 'antenna' | 'crateStack' | 'pipeRun';
+  readonly kind: DecorKind;
   readonly position: Vector3;
   /** Degrees of yaw. Only used by pieces that are not rotationally symmetric. */
   readonly yawDeg?: number;
   /** Length along the local X axis, for the pieces that have one. Metres. */
   readonly length?: number;
 }
+
+/** The decorative piece families. */
+export type DecorKind = 'lamp' | 'antenna' | 'crateStack' | 'pipeRun';
+
+/**
+ * Dimensions of every decorative piece, in metres.
+ *
+ * One table, two consumers — the same contract `props` has. `render/scene/levelView.ts`
+ * builds the meshes from these numbers and {@link decorCollisionBoxes} derives the physical
+ * boxes from them, so "the lamp you can see" and "the lamp that stops you" cannot drift
+ * apart. Before this table the numbers lived only in the view, which is why the collision
+ * side could not have been written at all without duplicating them.
+ */
+export const DECOR_SPECS = {
+  lamp: {
+    poleHeight: 6,
+    poleBottomRadius: 0.12,
+    poleTopRadius: 0.09,
+    headHeight: 6.1,
+    headRadius: 0.34,
+  },
+  antenna: {
+    mastHeight: 5,
+    mastBottomRadius: 0.08,
+    mastTopRadius: 0.06,
+    tipHeight: 5.1,
+    tipRadius: 0.16,
+  },
+  crateStack: {
+    /** Bottom crate first. Each is a cube of this edge length. */
+    sizes: [1.4, 1.1, 0.8],
+    stepX: 0.18,
+    stepZ: 0.12,
+    yawStepRad: 0.4,
+  },
+  pipeRun: {
+    pipeCount: 3,
+    pipeRadius: 0.13,
+    firstPipeHeight: 0.55,
+    pipeSpacing: 0.3,
+    trestleWidth: 0.16,
+    trestleHeight: 1.2,
+    trestleDepth: 0.5,
+    /** One trestle every this many metres of run, with a floor of two. */
+    trestleEvery: 6,
+    defaultLength: 20,
+  },
+} as const satisfies Record<DecorKind, Record<string, number | readonly number[]>>;
+
+/**
+ * The physical footprint of a decorative piece, in world space.
+ *
+ * Conservative by construction: where the mesh is round (a pole, a pipe) the box is the
+ * enclosing one, and where a crate is yawed the box is the enclosing axis-aligned square.
+ * Being slightly bigger than the paint is the safe direction — the failure it prevents is
+ * "I am standing inside the lamp post", and a collision box that is a few centimetres proud
+ * of a cylinder is not something a player can see.
+ *
+ * Pure, and exported so `tests/level.test.ts` can assert the two things that matter without
+ * re-deriving them: every piece has a body, and every body is in both world lists.
+ */
+export function decorCollisionBoxes(decor: Decor): Aabb[] {
+  const yaw = (decor.yawDeg ?? 0) * DEG2RAD;
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  /** Rotates a local offset into world space, about Y. */
+  const place = (offsetX: number, offsetY: number, offsetZ: number): Vector3 => ({
+    x: decor.position.x + offsetX * cos + offsetZ * sin,
+    y: decor.position.y + offsetY,
+    z: decor.position.z - offsetX * sin + offsetZ * cos,
+  });
+  /** Enclosing half-extents of a yawed box. */
+  const rotated = (halfX: number, halfY: number, halfZ: number, boxYaw: number): Vector3 => {
+    const c = Math.abs(Math.cos(boxYaw));
+    const s = Math.abs(Math.sin(boxYaw));
+    return { x: halfX * c + halfZ * s, y: halfY, z: halfX * s + halfZ * c };
+  };
+
+  if (decor.kind === 'lamp') {
+    const spec = DECOR_SPECS.lamp;
+    // The pole only. The head is 6 m up and nothing can reach it, so a second box would be
+    // a second thing to keep in step for no gameplay at all.
+    return [
+      {
+        center: place(0, spec.poleHeight / 2, 0),
+        halfExtents: rotated(spec.poleBottomRadius, spec.poleHeight / 2, spec.poleBottomRadius, yaw),
+      },
+    ];
+  }
+
+  if (decor.kind === 'antenna') {
+    const spec = DECOR_SPECS.antenna;
+    return [
+      {
+        center: place(0, spec.mastHeight / 2, 0),
+        halfExtents: rotated(spec.mastBottomRadius, spec.mastHeight / 2, spec.mastBottomRadius, yaw),
+      },
+    ];
+  }
+
+  if (decor.kind === 'pipeRun') {
+    const spec = DECOR_SPECS.pipeRun;
+    const length = decor.length ?? spec.defaultLength;
+    // The run's real top: the highest pipe plus its radius, which is above the trestles.
+    const top = spec.firstPipeHeight + (spec.pipeCount - 1) * spec.pipeSpacing + spec.pipeRadius;
+    return [
+      {
+        center: place(0, top / 2, 0),
+        halfExtents: rotated(length / 2, top / 2, Math.max(spec.trestleDepth, spec.pipeRadius * 2) / 2, yaw),
+      },
+    ];
+  }
+
+  const spec = DECOR_SPECS.crateStack;
+  const boxes: Aabb[] = [];
+  let y = 0;
+  for (let i = 0; i < spec.sizes.length; i += 1) {
+    const size = spec.sizes[i] ?? 0;
+    const half = size / 2;
+    const offsetX = (i - 1) * spec.stepX;
+    const offsetZ = (i - 1) * spec.stepZ;
+    boxes.push({
+      center: place(offsetX, y + half, offsetZ),
+      // Each crate is yawed by its own angle inside the stack, so its enclosing box grows.
+      halfExtents: rotated(half, half, half, i * spec.yawStepRad),
+    });
+    y += size;
+  }
+  return boxes;
+}
+
 
 /** Static target dummy placed for phase-1 weapon tuning. */
 export interface TargetSpec {
@@ -80,7 +228,13 @@ export interface LevelData {
   readonly props: readonly Prop[];
   readonly decor: readonly Decor[];
   readonly targets: readonly TargetSpec[];
-  /** Movement collision boxes, pre-expanded from `props`. */
+  /**
+   * Movement collision boxes: the ground slab, `props` and every decorative piece.
+   *
+   * This is the list `createCollisionWorld` reads, so it *is* the world the player and the
+   * enemies walk in. (Until phase 6 it was a second, parallel derivation from `props` and
+   * nothing in `src/` consumed it at all.)
+   */
   readonly collisionBoxes: readonly Aabb[];
   /**
    * Bullet-blocking boxes only. Fences are deliberately absent: a visible
@@ -269,20 +423,24 @@ function buildTargets(): TargetSpec[] {
 }
 
 /**
- * Purely decorative extras.
+ * The decorative pieces, as data.
  *
- * ## Why this channel exists (phase 4)
+ * ## What this channel is for (and is no longer for)
  *
- * The level's *geometry* is a single source of truth: `props` derives the meshes,
- * the movement collision boxes **and** the bullet blockers at once, which is what
- * keeps "the wall you can see" and "the wall that stops bullets" the same wall. That
- * also means dressing the level up by editing `props` silently changes what the
- * player can walk through — so anything that is meant to be looked at and not
- * collided with goes here, where it can never enter the collision world or the
- * shot resolver.
+ * The level's *cover* is authored in `props`, which derives the meshes, the movement
+ * collision boxes **and** the bullet blockers at once — that is what keeps "the wall you
+ * can see" and "the wall that stops bullets" the same wall. This list is for the pieces
+ * that are placed by hand and built by a dedicated mesh builder: the perimeter lamps, the
+ * masts, the crate stacks and the pipe runs.
  *
- * Everything in this list is therefore free: no `collisionBoxes`, no `blockers`, no
- * effect on a shot. `tests/level.test.ts` asserts exactly that.
+ * Phase 4 made that list non-colliding on purpose, on the grounds that dressing the level
+ * up should not change what the player can walk through. The player-visible result was
+ * worse than the coupling it avoided: you walked through lamp posts and pipe runs, which
+ * reads as a broken game and not as a deliberately empty collision world. Since phase 6
+ * every piece here derives its collision boxes from {@link DECOR_SPECS} — the same numbers
+ * the meshes are built from — so it is physical *and* cannot drift from its paint. What the
+ * channel still buys is the thing it was really for: these pieces come from a list with
+ * their own mesh builders, so they are not `props` and cannot be confused with cover.
  */
 function buildDecor(): Decor[] {
   return [
@@ -313,9 +471,17 @@ function buildDecor(): Decor[] {
     // Long, low, and parallel to the fence: they give the perimeter a horizontal
     // line to read against the vertical fence posts, which is most of what stops a
     // 48 m box from looking like four flat walls.
-    { kind: 'pipeRun', position: { x: 0, y: 0, z: -21.5 }, yawDeg: 0, length: 34 },
-    { kind: 'pipeRun', position: { x: -21.5, y: 0, z: -2 }, yawDeg: 90, length: 28 },
-    { kind: 'pipeRun', position: { x: 21.5, y: 0, z: 4 }, yawDeg: 90, length: 22 },
+    //
+    // **They hug the fence, and that is a collision decision rather than a taste one.**
+    // They became solid in phase 6, and the enemy AI has no pathfinding — it seeks and is
+    // then pushed out along the shallowest axis. A run parked 2.5 m off the wall would
+    // therefore cut a corridor off behind itself that a spawn could land in and that an
+    // enemy could only slide along, for as long as it takes to reach the end of the run.
+    // At 23.0 m the run's arena-side face (22.75 m) is outside the spawn band (21.6 m), so
+    // the corridor is unreachable by construction. `tests/level.test.ts` pins that.
+    { kind: 'pipeRun', position: { x: 0, y: 0, z: -23 }, yawDeg: 0, length: 34 },
+    { kind: 'pipeRun', position: { x: -23, y: 0, z: -2 }, yawDeg: 90, length: 28 },
+    { kind: 'pipeRun', position: { x: 23, y: 0, z: 4 }, yawDeg: 90, length: 22 },
   ];
 }
 
@@ -376,9 +542,22 @@ export function buildLevel(seed: number = seedFromString('box-garden-level-1')):
   collisionBoxes.push(...fence.collision);
   // Fence explicitly does not block shots, so it is absent from `blockers`.
 
+  // --- Decorative pieces (phase 6) -----------------------------------------
+  // Every one of them is physical: the same boxes go into the movement list and the
+  // bullet list, so a lamp post stops a player *and* a round. The fence is the only piece
+  // of the level allowed to stop one and not the other, and that is a deliberate,
+  // separately asserted decision (see `blockers`).
+  const decor = buildDecor();
+  for (const piece of decor) {
+    for (const box of decorCollisionBoxes(piece)) {
+      collisionBoxes.push(box);
+      blockers.push(box);
+    }
+  }
+
   return {
     props,
-    decor: buildDecor(),
+    decor,
     targets: buildTargets(),
     collisionBoxes,
     blockers,

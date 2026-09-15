@@ -1,5 +1,6 @@
 /**
- * Presentation-layer tests: enemy bodies, telegraph markers, damage vignette.
+ * Presentation-layer tests: enemy bodies, telegraph markers, damage vignette, and the
+ * player's own body.
  *
  * The rule is that `src/render/**` decides nothing, so there is deliberately very
  * little here to assert. What is left is the handful of properties that are
@@ -12,19 +13,28 @@
  *   - **Markers are keyed by index against the simulation's array**, because that
  *     is the contract the composition root relies on when it rebuilds the marker
  *     list every frame instead of pushing events.
+ *   - **The player's body is turned and placed by the rig** (phase 6), which is the
+ *     part that used to be four untestable lines inside `main.ts`.
  *
  * None of this needs WebGL: geometry, materials and the scene graph are plain data
  * structures until something renders them.
  */
 
 import { describe, expect, it } from 'vitest';
-import { Mesh, Object3D, Vector3 } from 'three';
+import { AnimationClip, BoxGeometry, Group, Mesh, MeshStandardMaterial, Object3D, Vector3 } from 'three';
 import { createEnemyView } from '#/render/models/enemyView';
+import { buildCharacter, createPlaceholderCharacter, type CharacterModel } from '#/render/models/CharacterLoader';
+import { createCharacterRig } from '#/render/models/characterRig';
 import { createTelegraphView } from '#/render/fx/telegraph';
 import { createHud, hudVisibility, type HudElements } from '#/render/hud/hud';
 import { createWorld } from '#/game/World';
+import { createPlayerState } from '#/game/player/player';
+import { createWeaponState } from '#/game/player/weapon';
+import { PLAYER } from '#/core/config';
+import { DEG2RAD } from '#/core/math/vec3';
 import { EventBus } from '#/core/events';
 import type { EnemyState } from '#/game/enemies/EnemyState';
+import type { PlayerState } from '#/game/player/player';
 import type { ImpactMarker } from '#/render/fx/telegraph';
 
 /**
@@ -407,5 +417,157 @@ describe('HUD layer state', () => {
     // animation window is not silently swallowed.
     expect(elements.damageFlash.classList.contains('hit')).toBe(true);
     expect(() => hud.dispose()).not.toThrow();
+  });
+});
+
+/**
+ * The body rig.
+ *
+ * These are the assertions that the four lines in `main.ts` could never have: the body turn
+ * is driven, the clip follows the simulation's velocity rather than the keyboard, and a
+ * restart puts a dead body back on its feet. Every one of them is a `main.ts`-shaped mistake
+ * that a green suite would have let through — `InputState.update()` was never called for the
+ * whole life of the build for exactly this reason.
+ */
+describe('character rig', () => {
+  /** A player state good enough to drive the rig: a rig reads, it does not simulate. */
+  function playerState(overrides: Partial<PlayerState> = {}): PlayerState {
+    const state = createPlayerState(createWeaponState(1));
+    return Object.assign(state, overrides);
+  }
+
+  /**
+   * A body with real clips, so the death hold and its reset are observable.
+   *
+   * The procedural stand-in has no animation states at all (`play` is a no-op on it), which
+   * makes it the right model for the placement and turn assertions and useless for the
+   * question "did the body come back off the floor".
+   */
+  function clipModel(): CharacterModel {
+    const group = new Group();
+    const mesh = new Mesh(new BoxGeometry(0.5, 1.75, 0.5), new MeshStandardMaterial());
+    mesh.position.y = 1.75 / 2;
+    group.add(mesh);
+    const clips = [new AnimationClip('idle', 1, []), new AnimationClip('death', 1, [])];
+    return buildCharacter(group, clips, 1.75, () => {});
+  }
+
+  it('turns the body toward the direction of travel, not toward the camera', () => {
+    const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+    const player = playerState({ yaw: 0 });
+    rig.sync(player, 1 / 60); // placed, facing the camera
+
+    // Walking -X (to the player's left) while the camera looks straight down -Z: the body
+    // has to come round a quarter turn, which is the whole point of the feature.
+    player.velocity.x = -PLAYER.walkSpeed;
+    // One 12° step at the configured rate, so the turn is visibly a turn and not a snap.
+    rig.sync(player, 1 / 60);
+    expect(rig.yaw).toBeCloseTo(PLAYER.turnRateDegPerSec * DEG2RAD * (1 / 60), 9);
+
+    for (let i = 0; i < 14; i += 1) rig.sync(player, 1 / 60);
+
+    expect(rig.yaw).toBeCloseTo(Math.PI / 2, 6);
+    // The rendering convention: the model faces +Z, the simulation's yaw 0 faces -Z.
+    expect(rig.model.root.rotation.y).toBeCloseTo(Math.PI / 2 + Math.PI, 6);
+  });
+
+  it('places the body at the player, on every frame', () => {
+    const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+    const player = playerState();
+    player.position.x = 3;
+    player.position.y = 1.5;
+    player.position.z = -7.25;
+
+    rig.sync(player, 1 / 60);
+
+    expect(rig.model.root.position.x).toBe(3);
+    expect(rig.model.root.position.y).toBe(1.5);
+    expect(rig.model.root.position.z).toBe(-7.25);
+  });
+
+  it('snaps the body to the camera on the first frame instead of pivoting to it', () => {
+    // The model loads asynchronously, so the first `sync` can be a long way into a run. A
+    // body that pivoted from yaw 0 to the player's yaw at that moment would turn for no
+    // reason the player could explain.
+    const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+    const player = playerState({ yaw: 2.4 });
+
+    rig.sync(player, 1 / 60);
+
+    expect(rig.yaw).toBeCloseTo(2.4, 12);
+    expect(rig.bank).toBe(0);
+  });
+
+  it('leans the body while it is turning and settles when it is not', () => {
+    const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+    const player = playerState({ yaw: 3.1 });
+    rig.sync(player, 1 / 60); // placed
+
+    player.velocity.x = -PLAYER.walkSpeed;
+    rig.sync(player, 1 / 60);
+    expect(Math.abs(rig.bank)).toBeGreaterThan(0);
+    expect(rig.model.root.rotation.z).toBeCloseTo(rig.bank, 12);
+
+    // Keep walking long enough for the body to arrive and the lean to wash out.
+    for (let i = 0; i < 120; i += 1) rig.sync(player, 1 / 60);
+    expect(rig.yaw).toBeCloseTo(Math.PI / 2, 6);
+    expect(rig.bank).toBeCloseTo(0, 3);
+  });
+
+  it('picks the clip from the simulation, not from the input', () => {
+    const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+    const player = playerState();
+
+    rig.sync(player, 1 / 60);
+    expect(rig.state).toBe('idle');
+
+    // Sprinting state: the body follows the world's speed.
+    player.velocity.x = PLAYER.sprintSpeed;
+    rig.sync(player, 1 / 60);
+    expect(rig.state).toBe('run');
+
+    player.velocity.x = PLAYER.walkSpeed;
+    rig.sync(player, 1 / 60);
+    expect(rig.state).toBe('walk');
+
+    // Held against a crate: the key is still down, the speed is zero, and the body must
+    // read as standing rather than as running on the spot.
+    player.velocity.x = 0;
+    player.velocity.z = 0;
+    rig.sync(player, 1 / 60);
+    expect(rig.state).toBe('idle');
+  });
+
+  it('reports the reload and the death state the simulation is in', () => {
+    const rig = createCharacterRig(createPlaceholderCharacter(1.75));
+    const player = playerState();
+    player.weapon.mode = 'reloading';
+    rig.sync(player, 1 / 60);
+    expect(rig.state).toBe('reload');
+
+    player.weapon.mode = 'idle';
+    player.dead = true;
+    rig.sync(player, 1 / 60);
+    expect(rig.state).toBe('death');
+  });
+
+  it('puts the body back on its feet when the run restarts', () => {
+    const rig = createCharacterRig(clipModel());
+    const player = playerState();
+    player.dead = true;
+    rig.sync(player, 1 / 60);
+    rig.sync(player, 1 / 60);
+    expect(rig.state).toBe('death');
+    expect(rig.model.state).toBe('death');
+
+    player.dead = false;
+    rig.reset(player.yaw);
+    rig.sync(player, 1 / 60);
+
+    // Without the reset the model refuses to leave the death clip — `play` is a no-op out
+    // of it by design — and the next run begins with a body lying in the arena.
+    expect(rig.state).toBe('idle');
+    expect(rig.model.state).toBe('idle');
+    expect(rig.bank).toBe(0);
   });
 });

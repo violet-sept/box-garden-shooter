@@ -25,7 +25,7 @@ import {
 } from 'three';
 import { RENDER } from '../../core/config';
 import { DEG2RAD } from '../../core/math/vec3';
-import type { Decor, LevelData, Prop, PropKind, TargetSpec } from '../../game/level';
+import { DECOR_SPECS, type Decor, type LevelData, type Prop, type PropKind, type TargetSpec } from '../../game/level';
 import { createRng, seedFromString } from '../../core/math/rng';
 
 /** Layers used by the renderer. Layer 0 is the level; see the shot resolver. */
@@ -178,7 +178,14 @@ function buildInstancedGroup(kind: PropKind, props: readonly Prop[], dummy: Obje
   return mesh;
 }
 
-/** Builds a decorative prop. Never in the collision world, never shot at. */
+/**
+ * Builds a decorative piece.
+ *
+ * Every dimension here comes from `DECOR_SPECS` in `game/level.ts`, which is the same table
+ * `decorCollisionBoxes` derives the piece's physical body from. That is the whole reason the
+ * table exists: the mesh and the collision box are two readings of one set of numbers, so a
+ * lamp post cannot end up 10 cm thinner than the thing that stops the player.
+ */
 function buildDecor(decor: Decor): Group {
   const group = new Group();
   group.name = `decor:${decor.kind}`;
@@ -186,40 +193,44 @@ function buildDecor(decor: Decor): Group {
   group.rotation.y = ((decor.yawDeg ?? 0) * Math.PI) / 180;
 
   if (decor.kind === 'lamp') {
+    const spec = DECOR_SPECS.lamp;
     const pole = new Mesh(
-      new CylinderGeometry(0.09, 0.12, 6, 8),
+      new CylinderGeometry(spec.poleTopRadius, spec.poleBottomRadius, spec.poleHeight, 8),
       new MeshStandardMaterial({ color: 0x59636f, roughness: 0.5, metalness: 0.6 }),
     );
-    pole.position.y = 3;
+    pole.position.y = spec.poleHeight / 2;
     pole.castShadow = true;
     group.add(pole);
 
     const head = new Mesh(
-      new SphereGeometry(0.34, 12, 8),
+      new SphereGeometry(spec.headRadius, 12, 8),
       new MeshStandardMaterial({ color: 0x0d0f13, emissive: 0xffd9a0, emissiveIntensity: 1.6 }),
     );
-    head.position.y = 6.1;
+    head.position.y = spec.headHeight;
     group.add(head);
     return group;
   }
 
   if (decor.kind === 'pipeRun') {
-    // A parallel run of three pipes on short trestles. Purely a horizontal line for
-    // the eye: nothing here is in `collisionBoxes`, so the player walks straight
-    // through it, which is exactly why it is decor rather than a prop.
-    const length = decor.length ?? 20;
+    // A parallel run of three pipes on short trestles. Waist high, and solid since phase 6:
+    // it is cover you can crouch-walk behind by walking up to it, and it stops bullets.
+    const spec = DECOR_SPECS.pipeRun;
+    const length = decor.length ?? spec.defaultLength;
     const pipeMaterial = new MeshStandardMaterial({ color: 0x76808c, roughness: 0.45, metalness: 0.7 });
     const trestleMaterial = new MeshStandardMaterial({ color: 0x3b434d, roughness: 0.85 });
-    for (let i = 0; i < 3; i += 1) {
-      const pipe = new Mesh(new CylinderGeometry(0.13, 0.13, length, 10), pipeMaterial);
+    for (let i = 0; i < spec.pipeCount; i += 1) {
+      const pipe = new Mesh(new CylinderGeometry(spec.pipeRadius, spec.pipeRadius, length, 10), pipeMaterial);
       pipe.rotation.z = Math.PI / 2;
-      pipe.position.y = 0.55 + i * 0.3;
+      pipe.position.y = spec.firstPipeHeight + i * spec.pipeSpacing;
       group.add(pipe);
     }
-    const trestleCount = Math.max(2, Math.round(length / 6));
+    const trestleCount = Math.max(2, Math.round(length / spec.trestleEvery));
     for (let i = 0; i < trestleCount; i += 1) {
-      const post = new Mesh(new BoxGeometry(0.16, 1.2, 0.5), trestleMaterial);
-      post.position.set(-length / 2 + (length * i) / (trestleCount - 1), 0.6, 0);
+      const post = new Mesh(
+        new BoxGeometry(spec.trestleWidth, spec.trestleHeight, spec.trestleDepth),
+        trestleMaterial,
+      );
+      post.position.set(-length / 2 + (length * i) / (trestleCount - 1), spec.trestleHeight / 2, 0);
       post.castShadow = true;
       group.add(post);
     }
@@ -227,32 +238,34 @@ function buildDecor(decor: Decor): Group {
   }
 
   if (decor.kind === 'antenna') {
+    const spec = DECOR_SPECS.antenna;
     const mast = new Mesh(
-      new CylinderGeometry(0.06, 0.08, 5, 6),
+      new CylinderGeometry(spec.mastTopRadius, spec.mastBottomRadius, spec.mastHeight, 6),
       new MeshStandardMaterial({ color: 0x6b7683, roughness: 0.4, metalness: 0.7 }),
     );
-    mast.position.y = 2.5;
+    mast.position.y = spec.mastHeight / 2;
     group.add(mast);
     const tip = new Mesh(
-      new SphereGeometry(0.16, 10, 8),
+      new SphereGeometry(spec.tipRadius, 10, 8),
       new MeshStandardMaterial({ color: 0x14181e, emissive: 0xff5a4d, emissiveIntensity: 2.2 }),
     );
-    tip.position.y = 5.1;
+    tip.position.y = spec.tipHeight;
     group.add(tip);
     return group;
   }
 
-  // Crate stack: three boxes, purely for silhouette variety.
-  const sizes = [1.4, 1.1, 0.8];
+  // Crate stack: three boxes, for silhouette variety — and three collision boxes, one per
+  // crate, because the stack is stepped and the top crate does not reach over the bottom one.
+  const spec = DECOR_SPECS.crateStack;
   let y = 0;
-  for (let i = 0; i < sizes.length; i += 1) {
-    const size = sizes[i] ?? 1;
+  for (let i = 0; i < spec.sizes.length; i += 1) {
+    const size = spec.sizes[i] ?? 1;
     const box = new Mesh(
       new BoxGeometry(size, size, size),
       new MeshStandardMaterial({ color: i % 2 === 0 ? 0x8a6a44 : 0x9c7a4e, roughness: 0.9 }),
     );
-    box.position.set((i - 1) * 0.18, y + size / 2, (i - 1) * 0.12);
-    box.rotation.y = i * 0.4;
+    box.position.set((i - 1) * spec.stepX, y + size / 2, (i - 1) * spec.stepZ);
+    box.rotation.y = i * spec.yawStepRad;
     box.castShadow = true;
     box.receiveShadow = true;
     group.add(box);

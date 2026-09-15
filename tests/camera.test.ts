@@ -29,7 +29,7 @@ import {
 } from '#/game/camera/camera';
 import { createMovementScratch, createCollisionWorld, createPlayerState, tickPlayer } from '#/game/player/player';
 import { createWeaponState, tickWeapon } from '#/game/player/weapon';
-import { buildLevel } from '#/game/level';
+import { buildLevel, decorCollisionBoxes } from '#/game/level';
 
 /** Builds a player + camera at a given yaw/pitch, already aimed. */
 function makeRig(yaw: number, pitch: number, ads = 0) {
@@ -414,6 +414,53 @@ describe('player controller on the real level', () => {
     expect(player.position.z).toBeLessThan(0);
     expect(player.grounded).toBe(true);
     expect(player.position.y).toBeCloseTo(0, 6);
+  });
+
+  it('reads its obstacles from the one authored list, minus the floor', () => {
+    // `createCollisionWorld` used to re-derive its own obstacle list from `props`. That was
+    // equal to `collisionBoxes` right up until the decorative pieces became solid — at which
+    // point only one of the two derivations would have known about them, and the player
+    // would have kept walking through lamp posts with the collision list insisting otherwise.
+    expect(collision.obstacles.length).toBe(level.collisionBoxes.length - 1);
+    expect(collision.solids).toBe(level.blockers);
+  });
+
+  it('is stopped by a decorative piece, not only by cover', () => {
+    // Until phase 6 the lamp ring, the masts, the crate stacks and the pipe runs were
+    // looked-at-only: the player walked straight through them, which is exactly what a
+    // player reports as "the obstacles have no collision".
+    const lamp = level.decor.find(
+      (piece) => piece.kind === 'lamp' && Math.abs(piece.position.x) < 1e-9 && piece.position.z < -19,
+    );
+    expect(lamp).toBeDefined();
+    const post = decorCollisionBoxes(lamp!)[0]!;
+
+    const player = createPlayerState(createWeaponState(1));
+    // Three metres south of the post, facing north: straight at it, nothing in between.
+    player.position.x = post.center.x;
+    player.position.z = post.center.z + 3;
+    const scratch = createMovementScratch();
+    const intent = {
+      move: { forward: 1, right: 0 },
+      sprint: false,
+      jump: false,
+      fire: false,
+      aim: false,
+      reload: false,
+      throwItem: false,
+      lookDeltaX: 0,
+      lookDeltaY: 0,
+    };
+    let time = 0;
+    for (let i = 0; i < 180; i += 1) {
+      tickPlayer(player, scratch, collision, intent, 1 / 60, time);
+      time += 1 / 60;
+    }
+
+    // Stopped against the post's near face, on the spawn side of it: the capsule's radius is
+    // as much of a 0.24 m post as a 0.35 m capsule can get through, and it got through none.
+    expect(player.position.z).toBeGreaterThan(post.center.z);
+    expect(player.position.z).toBeCloseTo(post.center.z + post.halfExtents.z + PLAYER.radius, 1);
   });
 
   it('walks up a low curb instead of being blocked by it', () => {

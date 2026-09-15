@@ -4,11 +4,12 @@
 >
 > | 项目代号 | `box-garden-shooter` |
 > |---|---|
-> | 文档版本 | v1.12（P5 收尾追加 **S7：Web 上线走 GitHub Pages**——新增 [§5.15](#515-web-上线一个-dist-挂到-github-pages)、`.github/workflows/deploy-pages.yml`，并把运行时资产 URL 改成相对路径；同时刷新 §0 快照与 §0.1 的读数） |
+> | 文档版本 | v1.13（阶段 6：**现场反馈的三项**——转身动作 / 鼠标视角 / 装饰物变实体。其中"视角随鼠标"查出来是一条**从发布起就存在、且 467 个测试全部绿灯的接线缺陷**：`InputState.update()` 从来没有人调用。新增 [§5.17](#517-阶段-6现场反馈的三项转身鼠标视角装饰物变实体)） |
 > | 技术栈基线 | Three.js r186 · TypeScript 7 · Vite 8 · Electron 44 |
 > | 目标平台 | 浏览器（WebGL2 优先）· Windows 桌面端（Electron） |
 > | 单人开发周期 | 约 8 周（见 [§5 阶段计划](#5-阶段性项目实施计划)） |
-> | 当前进度 | **阶段 0 ✅ · 阶段 1 ✅ · 阶段 2 ✅ · 阶段 3 ✅ · 阶段 4 ✅ · 阶段 5 ✅ 代码与文档完成（24 文件 / 467 例全绿）**。阶段 5 交付了：S1–S7 **七项**交付决策落地 · CSP · 程序化图标 · `README.md` + [`docs/交付说明.md`](./交付说明.md) · **两个验收门槛缺陷的修复与单测** · **Web 端一键发布路径（GitHub Pages）**。⬜ **B 打包产物 / D 前序积压两组验收仍待一个普通（非沙箱）终端**；⬜ **Web 端"在浏览器里真的能玩"仍待一次真人点击**——**两者都不需要改代码**（清单见 [`docs/交付说明.md`](./交付说明.md) §4 与 §2.5） |
+> | 当前进度 | **阶段 0 ✅ · 阶段 1 ✅ · 阶段 2 ✅ · 阶段 3 ✅ · 阶段 4 ✅ · 阶段 5 ✅ · 阶段 6（现场反馈）✅ 代码与文档完成（25 文件 / 497 例全绿）**。阶段 5 交付了：S1–S7 **七项**交付决策落地 · CSP · 程序化图标 · `README.md` + [`docs/交付说明.md`](./交付说明.md) · **两个验收门槛缺陷的修复与单测** · **Web 端一键发布路径（GitHub Pages）**。阶段 6 交付了：**玩家身体的转身动作**（`render/models/characterTurn.ts` + `characterRig.ts`，把 `PLAYER.turnRateDegPerSec` 这个死旋钮接上）· **鼠标视角**（`InputState` 的折叠搬进 `sample()`——线上那份构建**根本不能转视角**）· **所有装饰物变实体**（`DECOR_SPECS` 单一真源 + `decorCollisionBoxes`）。⬜ **B 打包产物 / D 前序积压两组验收仍待一个普通（非沙箱）终端**；⬜ **Web 端"在浏览器里真的能玩"仍待一次真人点击**——**两者都不需要改代码**（清单见 [`docs/交付说明.md`](./交付说明.md) §4 与 §2.5） |
+> | **⚠️ 2026-09-15 发布的那份构建有个致命缺陷（已在源码里修掉，**尚未重新发布**）** | ❌ **线上 <https://violet-sept.github.io/box-garden-shooter/> 与仓库里 `89c115e` 的构建，鼠标**完全不能转视角**。真因：`InputState` 把累加的鼠标位移折叠进"本 tick"的那一步写在一个单独的 `update()` 里，而 `main.ts` **从来没有调用它**——所以 `lookDeltaX / lookDeltaY` 恒为 0，而 467 个测试全绿（它们自己调了 `update()`）。修法与钉住它的断言见 [§5.17.2](#5172-视角随鼠标移动一条从发布起就存在的接线缺陷)。**"能玩"这件事在修好之前无从谈起**，所以 §0.2 第 9 条的那次真人点击，必须发生在重新发布**之后** |
 > | **2026-09-15 实机进展（非沙箱终端首次实跑）** | ✅ **免安装产物首次产出**（`release\win-unpacked\box-garden-shooter.exe` 246,086,144 B · `resources\app.asar` 在位）· ✅ **外壳验收在新门槛下首次全绿**（`report-shell.json` `ok: true`：`requestCount 4` · 整帧 spread **235.51** / 场景带 **119.2** · 遮罩与指针锁定方向全对）· ✅ **渲染画面首次被人看过**。⬜ **NSIS 安装包未产出** · ⬜ **`--target packaged` 未绿**（脚本连不上调试端口 `EACCES`，而应用本身已启动并从 `app.asar` 加载了页面）· ⬜ **`--scene perf` 报告被中断未落盘**（但 F3 截图给出 **FPS 59 / step 0.80ms / draw 3.60ms / 130 实体**）· ⬜ 外壳那次 `fps 48.4` 需干净重测。全过程与三条待重跑命令见 [§5.16](#516-非沙箱终端首次实跑打包产物与三条待重跑的命令) |
 > | 事实核查 | 全部版本号与 API 行为已对一手来源核实，见 [§6.4](#64-事实核查与来源) |
 
@@ -27,7 +28,8 @@
 | 阶段 3 · 波次调度与道具 | ✅ **代码完成**（波次曲线 / 投放点筛选 / 导演状态机 / 双判据 Boss 解锁 / E 键投掷与爆炸溅射 / 胜负结算与重开）；`npm run typecheck` · `npm test`（**17 文件 / 366 例**）· `npm run build` 全绿。**实施纪要 [§5.9](#59-阶段-3-实施纪要供下一轮接续)**；三处目视验收项仍被本机沙箱阻塞（见下） |
 | 阶段 4 · 表现打磨与性能 | ✅ **代码与文档完成**（性能场景 `?scene=perf` · 程序化合成音效 D14 · 音量/静音持久化 · `sfx` 容差接线 · 雾死字段删除 · 关卡 `decor` 美化 · 对象池审计 · 尸体不投影 · 死亡特效）；`npm run typecheck` · `npm test`（**21 文件 / 422 例**）· `npm run build` 全绿。**实施纪要 [§5.11](#511-阶段-4-实施纪要供下一轮接续)**。⚠️ **B 性能 / C 表现 / D 数值三组没有验收**：本机沙箱仍拒绝 Chromium，也没有真人试听试玩（逐条结果见 [`docs/阶段4.md`](./阶段4.md) §8） |
 | 阶段 5 · 发布与打包 | ✅ **代码与文档完成**（S1–S7 全部定案 · CSP · 程序化图标 `build/icon.ico` · `README.md` + [`docs/交付说明.md`](./交付说明.md) · **修掉两个"永远不可能变绿"的验收门槛缺陷** · **GitHub Pages 一键发布路径**）；`npm run typecheck` · `npm test`（**24 文件 / 467 例**，阶段 1–4 的 422 例一例不减）· `npm run build` 全绿。**实施纪要 [§5.12](#512-阶段-5-实施纪要供下一轮接续) + 收尾 [§5.13](#513-收尾补丁现场反馈点击后没有任何反应静默失败已修) / [§5.14](#514-现场反馈的第二条启动即抛脱绑定的方法调用点击没反应的真因) / [§5.15](#515-web-上线一个-dist-挂到-github-pages)**。⚠️ **B 打包与产物 / D 前序积压两组未验收**：本机沙箱既起不了 Chromium 也跑不了 `electron-builder`（`spawn EPERM`），**必须移交普通终端**；⬜ **Web 端"在浏览器里能玩"另需一次真人点击**（Pages 发布本身无需本机）。见 [`docs/交付说明.md`](./交付说明.md) §4 与 §2.5 |
-| 代码规模 | `src/` 43 个 TS 文件 · `tests/` 24 个文件 / **467 例全绿** · `tools/` 4 个脚本（验收入口 + 图标生成 + PNG 编解码库）· `.github/workflows/` 1 个工作流（Web 发布） |
+| 阶段 6 · 现场反馈的三项 | ✅ **代码与文档完成**（**转身动作**：`render/models/characterTurn.ts` 纯数学 + `characterRig.ts` 把身体这一整块搬出 `main.ts`，顺手接上死旋钮 `PLAYER.turnRateDegPerSec` · **鼠标视角**：`InputState` 的位移折叠从没人调用的 `update()` 搬进 `sample()` · **装饰物变实体**：`game/level.ts` 的 `DECOR_SPECS` 单一真源 + `decorCollisionBoxes`，26 个新碰撞盒进 `collisionBoxes` 与 `blockers`，管路贴到围栏边以免在场上割出 AI 走不出来的走廊）。`npm run typecheck` · `npm test`（**25 文件 / 497 例**，阶段 1–5 的 467 例一例不减）· `npm run build`（55 模块）全绿。**实施纪要 [§5.17](#517-阶段-6现场反馈的三项转身鼠标视角装饰物变实体)** |
+| 代码规模 | `src/` 46 个 TS 文件 · `tests/` 25 个文件 / **497 例全绿** · `tools/` 4 个脚本（验收入口 + 图标生成 + PNG 编解码库）· `.github/workflows/` 1 个工作流（Web 发布） |
 | 玩法边界 | 阶段 3 起**调试编队已整块删除**：`DEBUG_ENEMIES` / `WorldOptions.debugEnemies` / `spawnDebugWave()` 都不存在了，场上敌人**只**由导演投放。`main.ts` 每局生成一次种子（`Date.now() >>> 0`）并显示在 F3 面板上。**阶段 4 新增的唯一"制造大量敌人"的入口是性能场景**，它住在 `src/debug/perfScene.ts`、只经 `?scene=perf` 打开、**没有往模拟层加任何分支** |
 | **阶段 3 实施纪要** | ✅ **[§5.9](#59-阶段-3-实施纪要供下一轮接续)** —— D12 / D13 定案、双判据与并发上限的实现方式、实施中发现并修掉的三个真 bug、表现层接线位置 |
 | **阶段 4 执行指导** | ✅ **[`docs/阶段4.md`](./阶段4.md)**（已执行完成，逐条结果在它 §8）—— 性能场景怎么接、音效架构（程序化合成 / `platform/audio/`）、关卡美化不得改碰撞几何、新增决策 D14 / D15、帧时间诊断顺序 |
@@ -52,6 +54,10 @@
 | `npm run desktop:accept -- --target packaged`（**非沙箱终端**，`.tmp-accept/report-packaged.json`，2026-09-15 19:39） | ❌ **`ok: false`，但失败点在验收脚本这一侧**：`launch: devtools endpoint never came up (connect EACCES 127.0.0.1:9333)`。同一份 `stderr` 证明**应用本身启动成功**：`DevTools listening on ws://127.0.0.1:9333/...`，并从 **`app.asar` 内部**加载了页面（`file:///E:/…/release/win-unpacked/resources/app.asar/dist/assets/index-jm7IpmLP.js`，随后打出 `[character] no model … using the procedural stand-in`）。**`EACCES`（WSAEACCES 10013）不是"端口被占用"**：`netsh int ipv4 show excludedportrange protocol=tcp` 实测只有 `50000–50059` 与 `54235`，**不含 9333**。最可能是新生成的未签名 exe **首次**监听回环时被防火墙 / WFP 拦下的一过性结果——几分钟后同一个 9333 被早已被系统放行的 `electron.exe` 正常使用（同一分钟的外壳验收就是绿的）。**对策：重跑一次；仍失败就换 `--port 9411`** |
 | 两条**被中断**的运行（2026-09-15 19:40） | ⚠️ `--scene perf` 与随后那次 `auto` 的 packaged 阶段都**没有写下报告**，`.tmp-accept` 里只留下 `stdout/stderr/screenshot`。原因：**报告与终判只在脚本跑完时才落盘**，而 `perf` 还要额外 8 s 测量，两次都在中途被 Ctrl+C / 关窗。**下一轮务必让命令自己结束**。附带一条无害噪声：perf 那次 `stderr` 里的 `[shell] failed to load build output … ERR_ABORTED (-3) loading '…?scene=perf'`，是**脚本强制 `Page.reload` 撞上了 shell 仍在飞的首次导航**——同一次运行的截图里 perf 场景已经正常在跑（`wave 1/8 · enemies 130`），不是加载失败 |
 | `npm run typecheck`（**阶段 5 收尾重跑**） | exit 0，无输出 |
+| `npm run typecheck`（**阶段 6 重跑**） | exit 0，无输出 |
+| `npm test`（**阶段 6 重跑**） | **25 文件 / 497 例全绿**（约 2.8s）：**阶段 1–5 的 467 例一例不减** + `characterTurn` **11** · `views` 16 → **23**（新增 7 例玩家身体 rig）· `input` 11 → **16**（新增 5 例鼠标视角）· `characterLoader` 12 → **15** · `level` 7 → **9** · `camera` 27 → **29**。性能下界同次读数：**120 实体 + 满射速平均 tick 0.627 ms / 最差 2.689 ms**（预算 8 / 40，仍有 4 倍余量） |
+| `npm run build`（**阶段 6 重跑**） | ✅ **55 模块**（+2：`characterTurn.ts` / `characterRig.ts`）；`dist/index.html` **8,467 B（gzip 3,288 / br 2,663）** · `assets/index-Dl3r24wl.js` **116,224 B（gzip 39,692 / br 34,099）** · `assets/three-DfhEDeNO.js` **628,128 B（gzip 156,919 / br 128,068，与阶段 5 同一个哈希、逐字节未变）** · 两份 `.map` 739,321 B / 3,039,839 B（磁盘字节 + 本地 `node:zlib` 默认参数；**`index.html` 的压缩后读数随注入的内容哈希漂 ±几字节**，原始 8,467 B 才是固定的那个数）。只有一条 chunk 体积提示，无报错 |
+| **三项现场反馈的修复都有断言**（**阶段 6**） | ✅ **转身**：`tests/characterTurn.test.ts` 11 例（朝向取"移动方向 vs 相机"、720°/s 的 180° 恰好 0.25s、60Hz 与 240Hz 同结果、跨 ±π 走近路、倾斜有上限且会回落、`dt = 0` 不产生 NaN）+ `tests/views.test.ts` 里 7 例 rig（真接线：转身 / 摆位 / 首帧快照 / 倾斜 / 按速度选 clip / 死亡后 `reset` 把人扶起来）· **鼠标视角**：`tests/input.test.ts` 5 例（**"不调用任何其它方法就能读到位移"**——这条就是那个缺陷本身；外加"锁定边界上在途的位移被丢弃"）· **装饰物实体**：`tests/level.test.ts` 9 例（每件装饰物都有实体、**在两个列表里都能找到**、管路不进刷怪带、除地板外没有东西埋在地下）+ `tests/camera.test.ts` 里 1 例**真的走进灯柱并被挡下** |
 | `npm test`（**S7 落地后重跑**） | **24 文件 / 467 例全绿**（约 2.6s）：**阶段 4 的 21 文件 / 422 例一例不减** + `acceptanceGate` **13** · `shell` **17** · `input` **11**（`audio` 37 含收尾新增的 4 例真总线回归） |
 | `npm run build`（**S7 落地后重跑**） | ✅ 53 模块；`dist/index.html` **8,467 B（gzip 3,291 / br 2,669）** · `assets/index-jm7IpmLP.js` **113,185 B（gzip 38,544 / br 33,245）** · `assets/three-DfhEDeNO.js` 628,128 B（gzip 156,919 / br 128,068）· 两份 `.map` 709,587 B / 3,039,839 B（以上均为磁盘字节 + 本地 `node:zlib`；Vite 自报的 gzip 略大，属口径差异）。只有一条 chunk 体积提示，无报错 |
 | `dist/` 子目录挂载实测（**S7**） | ✅ 用一个只认 `/box-garden-shooter/` 前缀的本地静态服务（Pages 项目站的形状）取 `index.html` + 两个分包 + 两份 `.map`：**全部 `200`，服务端字节与磁盘 SHA256 逐一致**；`index.html` 的两条引用实测都是 `./assets/...`；整包 `http(s)://` 计数 **2**（不可请求）、`eval(` / `new Function(` 计数 **0**；相对资产 URL 在三处基准下的解析实测：`https://<user>.github.io/<repo>/` → `.../<repo>/assets/models/player/player.glb`、`https://<user>.github.io/` → `.../assets/...`、`file:///…/dist/index.html` → `file:///…/dist/assets/...` |
@@ -100,13 +106,15 @@
    >
    > **2026-09-15 更新**：这一条现在由 [§0.1](#01-本轮实测证据可复现) 里那次非沙箱运行的 `screenshot-shell.png`（整帧 235.51 / 场景带 119.2）**接替**——那一张已经真的被看过，结论同上：**画面没问题，缺的是"包含 Warden 的一局"**。
 3. **音效已经存在，但没有任何人听过。** 阶段 4 按 [D14](#63-待决策项) 把音效做成了**全部程序化合成**（`platform/audio/**`，零音频文件），映射、增益、节流、并发、静音规则都有单测（`tests/audio.test.ts` 33 例），`[HITLOG]` 也加了 `sfx` 一路。但"四种敌人提示音可盲听区分"、"枪声与枪口火光同帧"、"首次点击前不报错"都**需要真机 + 耳朵**：本机沙箱拒绝 Chromium，因此这三条**未验收**。**好消息是"音频文件加载失败"这条假阳性路径已经被整块消掉**——`public/` 不存在这件事对音效不再有任何影响。
-4. **手感数值是未经试玩的起始基线——阶段 4 与阶段 5 都刻意没有动它们。** `src/core/config.ts` 里的射速、后坐力、扩散、移速、ADS 过渡、敌人节奏、导演节奏都还没有被真人手感验证过。**阶段 5 没有调参授权**，因此 `PLAYER` / `CAMERA` / `WEAPON` / `ENEMY` / `WARDEN` / `DIRECTOR` / `ITEMS` / `AUDIO` 与阶段 4 **逐字相同**：没有读数的调参等于换一个随机数。**要么补一局真人局读数，要么接受"数值是起始基线"交付。**
+4. **手感数值是未经试玩的起始基线——阶段 4 / 5 / 6 都刻意没有动它们。** `src/core/config.ts` 里的射速、后坐力、扩散、移速、ADS 过渡、敌人节奏、导演节奏都还没有被真人手感验证过。**阶段 5 没有调参授权**，因此 `CAMERA` / `WEAPON` / `ENEMY` / `WARDEN` / `DIRECTOR` / `ITEMS` / `AUDIO` 与阶段 4 **逐字相同**：没有读数的调参等于换一个随机数。**要么补一局真人局读数，要么接受"数值是起始基线"交付。**
+   > **阶段 6 的例外，写清楚以免被当成偷偷调参**：`PLAYER` 这一组多了四个字段、并接上了一个**从阶段 1 就躺在表里、从来没有被任何代码读过**的字段——`turnRateDegPerSec`（720°/s，现在是身体转身的角速度）、`idleSpeedThreshold`（0.15 m/s，取代 `main.ts` 里那个字面量 `0.15`）、`bodyTurnBankGain` / `bodyTurnBankMaxDeg` / `bodyTurnBankRate`（转身时的倾斜）。**这五个都是"新功能需要的、可调且已被测试钉住的旋钮"，不是对既有手感的重新定标**：走 / 跑速度、加速度、开镜、后坐力、扩散一个数没动。
 5. **真实的 `.glb` 从未被加载过——只跑过降级分支。** `public/` 目录**根本不存在**（枚举 `public` 无任何文件），所以 `PLAYER_MODEL_URL`（S7 之后是相对路径 `'./assets/models/player/player.glb'`，见 [§5.15](#515-web-上线一个-dist-挂到-github-pages)）每次启动都是一个取不到的地址，`loadCharacter` 每次都走 catch → 程序化胶囊体。因此"把 `.glb` 放进指定目录、不改代码即被加载并驱动动画"这条验收标准，**只被单测验证过**（`tests/characterLoader.test.ts` 的 12 例用内存里造的 glTF 场景），**端到端从未跑过**。`README.md` §4 与验收表都按这个口径写。
 6. ✅ **已闭环（阶段 3 / D12，阶段 5 补齐另一半）：验收脚本的"可选资产假阳性"已经修掉。** 下面保留这条读码结论的原貌——它记录了"删/放宽断言"与"开白名单 + 反向断言"之间的取舍：验收脚本曾会被上面这个缺失的可选资产判为 FAIL。这是阶段 2 把 `loadCharacter()` 接进 `main.ts` 之后才成立的：`tools/desktop-acceptance.mjs` 断言 `logErrors.length === 0` 与 `failedLoads.length === 0`，而 `Network.loadingFailed` 的收集**不按 scheme 过滤**——`file://` 页面上取不到本地文件正是 `ERR_FILE_NOT_FOUND` → `loadingFailed`，浏览器通常还会同时产生一条 level=error 的日志条目。修法与备选见 [D12](#63-待决策项)，**已在阶段 3 作为第 0 件事落地**（[§5.9.1](#591-d12-验收门槛改成了双向断言)）。
    > ⚠️ **阶段 5 的更正：D12 只修了一半。** 它白名单了 `Network` 通道，但**同一个失败还走 `Log.entryAdded`**，而未过滤的 `logErrors.length === 0` 仍然是硬失败——所以"可选资产假阳性"其实一直没消失，只是换了条通道（那次实机运行的报告里 `logErrors: ["network: Failed to load resource: net::ERR_FILE_NOT_FOUND"]` 就是铁证）。阶段 5 把两条通道改成同一套双向断言，并用 `tests/acceptanceGate.test.ts` 钉住，详见 [§5.12.1](#5121-两条再怎么跑也永远不会变绿的验收断言本轮最重要的发现)。
 7. ✅ **已闭环（阶段 3 / C1）：清理循环已改倒序，并补上"同 tick 全回收"断言。** 下面是这条低危内部不一致的原貌：`World.tick` 的清理循环用**正序** `for...of` 遍历 `enemies.targets`，而 `EnemyStore.despawn → retire` 用的是"末尾换入空位"的 O(1) 删除，正序遍历因此**可能跳过**某个死掉的条目，把它留到下一 tick 才回收。被跳过的条目 `alive` 已经是 `false`，所以**命中查询（`hitscan.ts` 第 153 行 `if (!target.alive) continue`）与 `aliveCount` / `liveCount` 都不受影响——它不等于阶段 2 那个泄漏**，不产生可观察的玩法后果。真正的问题是它与 `retire()` 里"nothing iterates it positionally"的注释相矛盾，而 `reset()` 为了同样的理由用的是倒序。详见 [§5.8](#58-阶段-3-开工前的新发现读码与实测) 的 C1。
 8. ⬜ **（阶段 5 新增）双端一致性从未被读数验证过。** 结构上的保证是成立的（两端加载**同一份 `dist/`**、同一份固定步长、同一张 `config.ts`），但 S6 选的判据是**同种子 `--scene perf` 两端各跑一次比对 `ticks` / `kills`**——这一步**没做**。同样未做的还有 WASD / 左键 / 右键 / `R` / `E` 五项在两端的人工确认。理由同第 1、2 条：本机跑不了桌面端，也跑不了浏览器。
-9. 🟡 **（S7）Web 端已经发布成功，只剩"一次真人点击"这条证据。** 仓库里已经有发布路径（[§5.15](#515-web-上线一个-dist-挂到-github-pages)），HTTP 层的证据也补齐了（子目录挂载、字节一致、零绝对引用）。**2026-09-15 又补齐了两条此前完全没有的事实**：① **工作流已经真的跑过两次**——run #1（`c2c5746`）`failure`、run #2（`32257a0`）`success`（GitHub Actions 记录实测）；② **站点实测 `HTTP 200`**（`https://violet-sept.github.io/box-garden-shooter/`，抓回来的 HTML 里标题、操作说明、静音面板与静态 CTA `正在载入…` 都在）。⬜ **仍然没有任何浏览器执行过那个页面**：静态 CTA 只在脚本跑过之后才会被替换，纯文本抓取看不到这一步，所以"点开能玩"仍待你点一次。**不需要改代码，也不需要普通终端。**
+9. 🟡 **（S7）Web 端已经发布成功，只剩"一次真人点击"这条证据——但必须先重新发布。** 仓库里已经有发布路径（[§5.15](#515-web-上线一个-dist-挂到-github-pages)），HTTP 层的证据也补齐了（子目录挂载、字节一致、零绝对引用）。**2026-09-15 又补齐了两条此前完全没有的事实**：① **工作流已经真的跑过两次**——run #1（`c2c5746`）`failure`、run #2（`32257a0`）`success`（GitHub Actions 记录实测）；② **站点实测 `HTTP 200`**（`https://violet-sept.github.io/box-garden-shooter/`，抓回来的 HTML 里标题、操作说明、静音面板与静态 CTA `正在载入…` 都在）。⬜ **仍然没有任何浏览器执行过那个页面**：静态 CTA 只在脚本跑过之后才会被替换，纯文本抓取看不到这一步，所以"点开能玩"仍待你点一次。**不需要改代码，也不需要普通终端。**
+   > ⚠️ **阶段 6 的更正：先别点。** 上面那份线上构建（`89c115e`，即 `dist/assets/index-jm7IpmLP.js`）里**鼠标转不了视角**（[§5.17.2](#5172-视角随鼠标移动一条从发布起就存在的接线缺陷)）：`InputState` 把位移折叠进 tick 的那一步在 `main.ts` 里从来没有被调用过，`lookDeltaX / lookDeltaY` 恒为 0。**推一次 `main` 让 Actions 重新发布之后，"点开能玩"这句话才有意义**——在那之前，那次点击只会得到"画面在动，但只能朝一个方向看"。
 
 ### 0.3 下一轮的第一件事（按优先级）
 
@@ -137,12 +145,12 @@
    拿到的读数写进 [§0.1](#01-本轮实测证据可复现) 的证据表；截图至少看一眼"两种敌人一眼可辨"（阶段 2 积压）、"投放预警 / 投掷物 / 爆炸 / 结算画面"（阶段 3 积压）、"密集敌群下的帧率"（阶段 4）。
 3. **`--scene perf` 的读数决定两件事**：① "120 实体 60 FPS"与"模拟 tick ≤ 2ms"是否达标；② [D3](#63-待决策项) 的 Bloom 要不要开（重开条件写在决策表里）。**没有读数之前不要开任何后处理**，也不要为了 `fps` 数字去调 `maxStepsPerFrame`。
 4. **最后做 S6 的双端一致性回归**：两端各跑一次 `?scene=perf` / `--scene perf`，比对 `ticks` / `kills`（应逐点一致）与两端 `fps`（均应 ≥ 59），并把五项操作在两端各确认一遍。
-5. **（已经做完，只剩"点一次"）Web 端已经在线**：`https://violet-sept.github.io/box-garden-shooter/` 实测 **`HTTP 200`**，工作流两次运行（#1 `failure` → #2 `success`，2026-09-15）。**剩下的唯一一步是用真实浏览器点一次**——那是第 9 条未验收项唯一的闭环方式。步骤、坑与"国内连通性不作承诺"的口径见 [`docs/交付说明.md`](./交付说明.md) §2.5。**不需要本机、不需要普通终端、不需要改代码。**
+5. **（已经做完，只剩"重新发布 + 点一次"）Web 端已经在线**：`https://violet-sept.github.io/box-garden-shooter/` 实测 **`HTTP 200`**，工作流两次运行（#1 `failure` → #2 `success`，2026-09-15）。**先推一次 `main`**，让 Actions 用阶段 6 的构建覆盖线上那份（**线上现在这份鼠标转不了视角**，见 [§5.17.2](#5172-视角随鼠标移动一条从发布起就存在的接线缺陷)）；然后再**用真实浏览器点一次**——那是第 9 条未验收项唯一的闭环方式，而且**要顺便确认鼠标能转视角**。步骤、坑与"国内连通性不作承诺"的口径见 [`docs/交付说明.md`](./交付说明.md) §2.5。**不需要本机、不需要普通终端。**
 
 > ⚠️ **不要**为了让上面任何一条变绿去放宽断言。阶段 5 修掉的那两条断言（[§5.12.1](#5121-两条再怎么跑也永远不会变绿的验收断言本轮最重要的发现)）之所以必须修，正是因为它们**测的不是它们声称在测的东西**——改的是测量对象与分类方式，阈值与"零容忍"的方向一寸没让。
 
 <a id="04-新对话必须知道的十条约定"></a>
-### 0.4 新对话必须知道的十三条约定
+### 0.4 新对话必须知道的十六条约定
 
 1. **测试文件用 `#/...` 导入源码**，不要改成 `@/...`（理由见 [§5.3](#53-测试运行环境适配受限沙箱)）。
 2. **不要为跑测试申请提权。** 受限沙箱下的测试运行已由 `tests/preload.mjs` + `vitest.config.mjs` + `.npmrc` 三处配置解决，已实测通过。
@@ -157,6 +165,9 @@
 11. **（阶段 5 起）验收断言不得为了让结果变绿而放宽，但"断言测的不是它声称在测的东西"必须修。** 阶段 5 修的两条（[§5.12.1](#5121-两条再怎么跑也永远不会变绿的验收断言本轮最重要的发现)）都是**改测量对象 / 改分类方式**，阈值与"零容忍"的方向一寸没让。**加每一条新断言时都要追问两句**：它失败时画面是什么样？它通过时能排除什么？——`requestCount: 0` 就是"通过但什么都没排除"的典型（连上后未 reload → 一个请求都没观察到）。
 12. **（阶段 5 起）写进 `index.html` 的每一个字都会跟着产物发给玩家。** CSP 的第一版把整套推理写成了 1.7 kB 的 HTML 注释（`index.html` 7.39 → 9.13 kB）；现在注释只留"为什么这两行不能删"，完整理由在 [§5.12.3](#5123-csp两条看起来多余删掉就黑屏的源)。**文档要长，产物要短。**
 13. **（S7 起）运行时资产的 URL 一律相对，不要写 `/assets/...`。** `base: './'` 让同一个 `dist/` 能挂在 `/`、`/<repo>/`（Pages 项目站）和 `file://`（桌面壳）下；**绝对路径会让其中两种情况去找错地方**，而"资产缺失"在本项目是**被支持的降级路径**（程序化占位体），于是失败是静默的。`PLAYER_MODEL_URL` 已改成 `'./assets/models/player/player.glb'`，由 `tests/shell.test.ts` 钉住（[§5.15](#515-web-上线一个-dist-挂到-github-pages)）。
+14. **（阶段 6 起）能"由调用方记得调一下"的折叠，一律不要做成独立方法。** 鼠标视角就是这么死的：`InputState` 有累加器、有一个把累加器折进本 tick 的 `update()`，而 `main.ts` 从来没有调用它——`lookDeltaX / lookDeltaY` 恒为 0，**线上那份构建根本不能转视角**，而 467 个测试全绿（它们自己调了 `update()`）。现在折叠在 `sample()` 里，**唯一读到 intent 的方式必然带着位移**，这个错误在结构上不可表达；`tests/input.test.ts` 的 5 条断言按"不调用任何其它方法就能读到位移"写（[§5.17.2](#5172-视角随鼠标移动一条从发布起就存在的接线缺陷)）。同一条教训的第 0 次出现是 `attach.ts` 里那个没绑定的方法（[§5.14](#514-现场反馈的第二条启动即抛脱绑定的方法调用点击没反应的真因)）。
+15. **（阶段 6 起）身体朝向是表现，不是判定。** `player.yaw` 是**相机**的权威角度（移动解算、弹道、相机全部读它）；角色身体的 yaw 只在 `render/models/characterTurn.ts` + `characterRig.ts` 里，按 `PLAYER.turnRateDegPerSec` 限速追上"移动方向"（站着不动时追相机），并带一点转身倾斜。**不要把身体 yaw 接进任何判定**——那会让"转身动画"变成"转身延迟"，而射击游戏里最不能有的就是输入延迟。`characterRig.ts` 存在的理由同样重要：**不要把这几行写回 `main.ts`**，那样它们就再也无法被单测（[§5.17.1](#5171-转身动作身体有自己的朝向而判定不认它)）。
+16. **（阶段 6 起）`decor` 是实体，尺寸只有一份。** 灯柱 / 天线 / 货箱堆 / 管路**都进 `collisionBoxes` 与 `blockers`**（26 个盒子），尺寸真源是 `game/level.ts` 的 `DECOR_SPECS`——`levelView.ts` 用它造网格，`decorCollisionBoxes()` 用它造碰撞盒，**不要再把尺寸写进视图**。凡是会"割出一条走廊"的长条形障碍物（现在只有管路），**必须落在 `SPAWN_LIMIT` 之外**：敌人 AI 没有寻路，只有 seek + 沿最浅轴推出，一条横在刷怪带里的长盒子会让敌人贴着它滑行十几秒（[§5.17.3](#5173-装饰物变实体26-个新碰撞盒与一条只对-ai-成立的约束)）。围栏的 `blocksShots: false` 仍是唯一刻意的例外。
 
 ---
 
@@ -508,12 +519,14 @@ box-garden-shooter/
 │  │     └─ throwableView.ts   # ✅ 阶段 3：投掷物视图（两趟认领扫描）
 │  ├─ hud/hud.ts            # DOM 覆盖层：准星/血量/弹药/道具 + 纯格式化函数
 │  └─ models/               # ✅ 阶段 2（GLTF 加载 + 缺失降级 + 敌人占位模型）
-│     ├─ CharacterLoader.ts # 逐 mesh 设 layers、Clip 关键字匹配与降级链
+│     ├─ CharacterLoader.ts # 逐 mesh 设 layers、Clip 关键字匹配与降级链、reset()（P6）
+│     ├─ characterRig.ts    # ✅ 阶段 6：玩家身体的摆位 / 转身 / clip（从 main.ts 搬出来才可单测）
+│     ├─ characterTurn.ts   # ✅ 阶段 6：身体朝向的纯数学（限速转身 + 倾斜，判定不读它）
 │     └─ enemyView.ts       # 按种类认领的敌人身体池（claimed / deadSince 两问分开）
 ├─ debug/
 │  ├─ hitlog.ts             # [HITLOG] 命中反馈链路计时与容差判定（含 sfx 一路）
 │  └─ perfScene.ts          # ✅ 阶段 4：性能场景（120 实体 + 满射速，只经 ?scene=perf 打开）
-├─ tests/                      # Vitest：纯逻辑单测 + 交付面断言（23 文件 / 444 例）
+├─ tests/                      # Vitest：纯逻辑单测 + 交付面断言（25 文件 / 497 例）
 │  ├─ preload.mjs              # 沙箱适配：net use 劫持 + ESM 扩展名推断
 │  ├─ weapon.test.ts  math.test.ts  damage.test.ts
 │  ├─ camera.test.ts  world.test.ts  hud.test.ts
@@ -887,7 +900,8 @@ const scaledDt = dt * this.timeScale;
 | 投掷物 | 8 | `Mesh` 复用，位姿每帧从模拟层读 | ✅ `render/fx/throwableView.ts`（阶段 3 新增），**两趟认领扫描，不建 `Set`** |
 | 投放预警环 | 16 | 环形缓冲，`spawn:pending` 点亮、`enemy:spawned` 熄灭 | ✅ `render/fx/spawnWarnings.ts`（阶段 3 新增） |
 | 敌人身体 | 每种若干 | **按种类认领**，尸体播完才复用 | ✅ `render/models/enemyView.ts`（阶段 2） |
-| 玩家身体 | 1 | 模型缺失时程序化胶囊体占位 | ✅ `render/models/CharacterLoader.ts` |
+| 玩家身体 | 1 | 模型缺失时程序化胶囊体占位（**带朝向特征**） | ✅ `render/models/CharacterLoader.ts`（P6 扩：`reset()` / `state` / `+Z` 朝向特征） |
+| 玩家身体的位姿 | 1 | 位置、**自己的身体 yaw**（限速追移动方向）、转身倾斜 | ✅ `render/models/characterRig.ts` + `characterTurn.ts`（**阶段 6 新建**，从 `main.ts` 搬出来才可单测） |
 
 > **阶段 4 要做的是"审计 + 补齐"，不是"从零建池"**：上表八处都已池化。真正要盯的是**在 `update()` 里凭空 `new` 出来的容器**——`enemyView` 曾用每帧 `new Set()` 标记载体（140 行注释里记着），`throwableView` 用两趟扫描替代了同类写法。**每次改表现层都按这条自查**：60Hz 下每秒 60 个短命容器就是每秒 60 次 GC 压力。
 >
@@ -930,7 +944,9 @@ const scaledDt = dt * this.timeScale;
 >
 > ⚠️ **教训留在原地**：留着一个"改了没用"的旋钮比没有这个旋钮更坏（下一个人会花时间在它上面）。所以阶段 4 **也没有**为 D3 的 Bloom 预留一个占位开关。
 >
-> ⚠️ **关卡几何的唯一真源是 `game/level.ts` 的 `props` 数组，不是网格。** `levelView.ts` 的 `InstancedMesh` 是它的派生视图，而**碰撞盒（`collisionBoxes`）与挡弹盒（`blockers`）也是从同一份 `props` 展开的**。所以关卡美化**不能新起一份手工摆放的几何**：挪动/删除 `props` 里的一项会**同时**改掉视觉、移动碰撞与子弹遮挡——这是设计意图（"能看见的墙"与"能挡住子弹的墙"只能是同一堵墙），但也是美化时最容易踩的雷。要加**纯装饰、不参与任何判定**的东西，走 `Decor` / `level.decor` 那条通道（它从不进碰撞世界，也从不被射线命中）。
+> ⚠️ **关卡几何的唯一真源是 `game/level.ts` 的 `props` 数组，不是网格。** `levelView.ts` 的 `InstancedMesh` 是它的派生视图，而**碰撞盒（`collisionBoxes`）与挡弹盒（`blockers`）也是从同一份 `props` 展开的**。所以关卡美化**不能新起一份手工摆放的几何**：挪动/删除 `props` 里的一项会**同时**改掉视觉、移动碰撞与子弹遮挡——这是设计意图（"能看见的墙"与"能挡住子弹的墙"只能是同一堵墙），但也是美化时最容易踩的雷。
+> **`Decor` / `level.decor` 那条通道从阶段 6 起也是实体的**（[§5.17.3](#5173-装饰物变实体26-个新碰撞盒与一条只对-ai-成立的约束)）：灯柱 / 天线 / 货箱堆 / 管路现在各有碰撞盒与挡弹盒，尺寸的单一真源是同文件的 `DECOR_SPECS`。它和 `props` 的差别只剩"摆放方式与造网格的代码在哪"，**"它是装饰所以不参与判定"这句话已经不成立了**。
+>
 >
 > 另一条同样容易忽略：`Prop.blocksShots: false` 是**故意**的（围栏挡人不挡子弹——一堵看得见却能吃子弹的边界会读成"隐形墙"）。美化围栏时不要"顺手"把它改成 `true`。
 >
@@ -969,11 +985,13 @@ if (enemy.health <= 0) enemy.speed = ENEMY_SMALL.moveSpeed;
 | `tests/math.test.ts` | 弹道积分、可播种随机的确定性（同种子同序列）、射线/球/盒相交、视角基正交性 | ✅ 33 例 |
 | `tests/steering.test.ts` | 分离力使两个重叠单位互相推开、不产生 NaN、零分配 | ✅ 27 例（P2） |
 | `tests/hitboxes.test.ts` | 头球顶部恰好落在 `height`、`hitboxes[0]` 永远是头、逐 tick 原位刷新 | ✅ 13 例（P2） |
-| `tests/characterLoader.test.ts` | Clip 关键字匹配、`run→walk→idle` 降级链、缺失即告警、比例归一化、**逐 mesh 设 layers** | ✅ 12 例（P2） |
+| `tests/characterLoader.test.ts` | Clip 关键字匹配、`run→walk→idle` 降级链、缺失即告警、比例归一化、**逐 mesh 设 layers**；**（P6 扩充 +3）`reset()` 把死亡保持清掉 · 两条路径的旋转序都是 `YXZ` · 占位体有朝向特征（都在 `+Z`、都在 layer 0）** | ✅ **15 例**（P2 12 + P6 3） |
 | `tests/enemies.test.ts` | 两套 FSM、距离带与预判、三发错峰轰炸、狂暴、攻击槽位轮转、玩家受伤/无敌帧/硬直/回血 | ✅ 41 例（P2） |
 | `tests/world-debug-loop.test.ts` | ~~整机战斗闭环：调试编队、AI 推进、实弹命中、尸体同 tick 回收、玩家死亡与复活、重置~~ | 🗑️ **已删除（P3）**——它整块依赖被删除的调试编队；有价值的断言已移植进 `world-wave-loop.test.ts` |
-| `tests/views.test.ts` | 敌人身体池不增长、尸体播完才复用、alpha 插值夹取、剪影高度差、预警环一一映射、遮罩契约；**（P4 扩充）尸体不投影且复用后恢复 · 重复 `update` 不新建对象 · 池子稳定在峰值并发数** | ✅ **16 例**（P2 13 + P4 3） |
-| `tests/camera.test.ts` | 瞄准轴收敛、ADS 过渡、相机避障、角色控制器（上台阶 / 贴墙滑行 / 不掉出场地） | ✅ 27 例（P1） |
+| `tests/views.test.ts` | 敌人身体池不增长、尸体播完才复用、alpha 插值夹取、剪影高度差、预警环一一映射、遮罩契约；**（P4 扩充）尸体不投影且复用后恢复 · 重复 `update` 不新建对象 · 池子稳定在峰值并发数**；**（P6 扩充 +7）玩家身体 rig**：朝移动方向转 / 限速 / 摆位 / 首帧快照 / 倾斜与回落 / 按速度选 clip / 重开时从死亡姿势复位 | ✅ **23 例**（P2 13 + P4 3 + P6 7） |
+| `tests/camera.test.ts` | 瞄准轴收敛、ADS 过渡、相机避障、角色控制器（上台阶 / 贴墙滑行 / 不掉出场地）；**（P6 扩充 +2）障碍物只读 `level.collisionBoxes` 这一份（只丢地板）· 真的撞在灯柱上被挡下** | ✅ **29 例**（P1 27 + P6 2） |
+| `tests/characterTurn.test.ts` | **（P6 新建）** 身体朝向：移动时取**移动方向**、静止时取**相机**、阈值处切换 · 限速（720°/s 的 180° 恰好 0.25s）且 **60Hz 与 240Hz 同结果** · 到位即**精确落在目标**而不是渐近 · 跨 ±π 走**近路** · 倾斜有上限、会回落、`dt = 0` 时不出 NaN · `resetBodyPose` 清倾斜 | ✅ **11 例（P6）** |
+| `tests/input.test.ts` | **（P5 收尾新建，P6 扩到 15 例）** 指针锁定的失败路径（`window` / `document` 打桩）：promise 拒绝 → 说明原因、`pointerlockerror` 备用通道、`dispose` 后的拒绝被丢弃、`describeLockFailure` 的四种输入；**（P6 +4）鼠标视角**：**一次读取就带位移（不调用任何其它方法）** · 同 tick 求和 · `endTick` 后不重复生效 · 未锁定时完全不读 | ✅ **15 例**（P5 11 + P6 4） |
 | `tests/world.test.ts` | 整机集成：定点射速、命中与击杀、**隔墙打不穿**、后坐力回正、同种子确定性、重置 | ✅ 18 例（P1） |
 | `tests/hud.test.ts` | HUD 数值格式化与颜色阈值、准星投影、`[HITLOG]` 帧容差与跨弹串扰过滤、遮罩/HUD 互换契约 | ✅ 20 例（P1 13 + P2 3 + P3 4） |
 | `tests/waves.test.ts` | 波次数量曲线单调且封顶、喘息波更轻且首波不喘息、间隔与 Boss 计时递减且**不破下限**、血量是配置幂、**同种子同曲线** | ✅ 14 例（P3） |
@@ -984,11 +1002,13 @@ if (enemy.health <= 0) enemy.speed = ENEMY_SMALL.moveSpeed;
 | `tests/audio.test.ts` | **（P4 新建）** 事件 → 描述符映射（近战 / 轰炸 / 落点锁定 / 投放通知**四种敌人提示音互不相同**、弱点命中多一层）、增益三段相乘与夹取、**静音仍生成描述符但增益为 0**、节流窗口、**并发到顶时按优先级丢弃（爆炸不被枪声挤掉）**、合成是纯函数（含噪声种子）、混音器在没有音频宿主时惰性但无害、场景门控与音量持久化 | ✅ **33 例（P4）** |
 | `tests/perf.test.ts` | **（P4 新建）** 性能场景在 120 实体 + 满射速下的一整 tick 上界（**下界证据**）、长跑后 `targets.length` 不增长、无 NaN、同种子确定性、`?scene=perf` 门控 | ✅ **7 例（P4）** |
 | `tests/scene.test.ts` | **（P4 新建）** **雾密度 / 阴影范围 / 阴影图尺寸 / 远裁剪面全部来自 `config.ts`**（改配置 → 派生值真的变）、只有一盏投影灯、阴影相机跟随不改变光的方向 | ✅ **6 例（P4）** |
-| `tests/level.test.ts` | **（P4 新建）** **碰撞盒 122 / 遮挡盒 22 / `ARENA_HALF_SIZE = 24` 不变**、出生点 3m 内无碰撞盒、围栏**挡人不挡子弹**、`decor` 不在两个碰撞列表里、同种子同布局 | ✅ **7 例（P4）** |
+| `tests/level.test.ts` | **（P4 新建，P6 扩到 9 例）** **碰撞盒 148 / 遮挡盒 48 / `ARENA_HALF_SIZE = 24` 不变**、出生点 3m 内无碰撞盒、围栏**挡人不挡子弹**、**每件装饰物都有实体且同时进两个列表**（P6 起，取代原先的"decor 不在两个碰撞列表里"）、**长管路不进敌人刷怪带**、除地板外没有东西埋在地下、同种子同布局 | ✅ **9 例（P6）** |
 | `tests/acceptanceGate.test.ts` | **（P5 新建）** 验收门槛的**纯逻辑**：PNG 编解码往返、**空白帧必须被判为平色**、**HUD-only 帧必须整帧通过而场景带失败**（这条保证第二条断言不是装饰）、坏输入返回数据而不抛异常、`cropRgba` 越界夹取、可选资产豁免在**两条通道**上的分类（URL 权威 / 无 URL 时文本必须点名 `player.glb` / 裸错误码**不得**被豁免）、**部分 `win-unpacked`（裸 Electron）不得被当成产物** | ✅ **10 例（P5）** |
 | `tests/shell.test.ts` | **（P5 新建）交付面钉子**：`index.html` 的 CSP（无 `unsafe-eval`、脚本无 `unsafe-inline`、含 `file:`、`ws:` 仅 loopback）· preload 暴露面**恰好一个**冻结对象且无 IPC · `main.cjs` 的 `contextIsolation` / `nodeIntegration` / `sandbox` 与"无退出确认（S3）" · `electron-builder.yml` 的 `files` 白名单 / `!**/*.map`（S1）/ `executableName`（S2）/ `npmRebuild: false` · `vite.config.ts` 的 `base: './'` 与 `sourcemap: true` · `package.json` 的 `dependencies` 为空且脚本齐全 · **`build/icon.ico` 的头 / 七个尺寸 / 必有 256×256 / 载荷不出界** · **README 提到的每一条 `npm run` 都必须真的存在**，且 README 的资产指引（路径、Clip 关键字、`run → walk → idle` 降级链、程序化占位口径）与 `CharacterLoader` 的实际实现一致 | ✅ **12 例（P5）** |
 
 > 合计：**阶段 5 结束 23 个文件 / 444 例**（阶段 4 的 21 文件 / 422 例**一例不减**，新增 `acceptanceGate` 10 · `shell` 12）。注意 `tests/views.test.ts`、`tests/scene.test.ts` 与 `tests/characterLoader.test.ts` 会 `import three` —— 这是**测试**触碰渲染层，不是 `src/game/**` 触碰渲染层，架构规则没有被破。它们证明的是"表现层不做决策"之外的几条硬性质（池子大小、层级掩码、契约方向、旋钮真的接线了），这些性质靠肉眼是看不出来的。
+>
+> **阶段 6 结束 25 个文件 / 497 例**：`acceptanceGate` / `shell` 与 P5 相同（13 / 17），新增 `characterTurn` **11**，`views` **23**、`input` **16**、`characterLoader` **15**、`level` **9**、`camera` **29**，其余一例不改。**"旋钮真的接线了"这句话在阶段 6 又多了两条实例**：`PLAYER.turnRateDegPerSec`（阶段 1 起就是死旋钮）与整个鼠标视角输入（[§5.17](#517-阶段-6现场反馈的三项转身鼠标视角装饰物变实体)）。
 >
 > **`tests/acceptanceGate.test.ts` 与 `tests/shell.test.ts` 是阶段 5 新增的两类钉子**：前者守**验收门槛本身**（本机跑不了 Chromium，单测是那些断言唯一的证据），后者守**交付决策**（改这些文件的人会立刻知道有约定）。两者都只读仓库源文件、**不读 `dist/`**——依赖构建产物的单测活不到"构建之前"。
 >
@@ -1046,7 +1066,7 @@ if (enemy.health <= 0) enemy.speed = ENEMY_SMALL.moveSpeed;
 | **性能指标从未被测量过**：对象池与 `InstancedMesh` 从阶段 1 就位，于是"性能已缓解"被当作结论写进了文档 | ⚠️ **性能场景已接通、Node 侧下界已测（0.587 ms/tick），真机读数仍未拿到**（本机沙箱拒绝 Chromium） | **缓解手段就位 ≠ 指标被测量过。** `--scene perf` 已把"能制造 120 实体"这条路修好，剩下的是一次非沙箱终端的实跑；在拿到读数之前**不要**调 `maxStepsPerFrame`、不要开后处理、不要凭感觉说"应该更快了" |
 | **音效天生想用文件，而 `public/` 不存在**：`new Audio('/assets/audio/*')` 会立刻制造一条必然失败的加载，正是 D12 刚修掉的那类假阳性 | ✅ **已按 D14 消掉整条路径**（全部程序化合成，零音频文件，[§5.11.2](#5112-d14-定案音效全部程序化合成落在-platformaudio)） | 保持：**新增任何声音都走 `SOUND_SPECS` 配方**，不要引入音频文件。真要有二进制资产，白名单 / `file://` 验证 / 缺文件降级三件事一起做 |
 | **"改了没用的旋钮"**：`RENDER.fogNear` / `fogFar` 被文档与代码都当作生效数值，实际雾的密度是硬编码的 | ✅ 已修（换成 `fogDensityPerArenaSpan` + `RENDER_TUNING` 单测，[§3.6](#36-渲染方案要点) 的实施记录） | **留一个改了没用的字段比没有它更坏**——下一个人会为它花时间。阶段 4 因此也**没有**为 D3 的 Bloom 预留占位开关 |
-| **美化关卡会顺手改掉碰撞**：`game/level.ts` 的 `props` 同时是视觉、碰撞盒与挡弹盒的唯一真源 | ✅ **本轮没有触发**：美化只走 `decor`（6 → 18 项）与 `COLORS` 调色，`props` 的尺寸/位置一寸未动 | `tests/level.test.ts` 硬编码钉住 `collisionBoxes = 122` / `blockers = 22` / `ARENA_HALF_SIZE = 24` / 出生点 3m 无碰撞盒 / 围栏 `blocksShots === false`。**下一轮要点亮关卡时，先跑这七条再看画面** |
+| **美化关卡会顺手改掉碰撞**：`game/level.ts` 的 `props` 同时是视觉、碰撞盒与挡弹盒的唯一真源 | ✅ **阶段 4 没有触发**：美化只走 `decor`（6 → 18 项）与 `COLORS` 调色，`props` 的尺寸/位置一寸未动。**阶段 6 把这条风险换了个方向**：`decor` 现在**自己**也派生碰撞与挡弹（`DECOR_SPECS`），所以要防的变成"网格与碰撞盒用了两组数字" | `tests/level.test.ts` 硬编码钉住 `collisionBoxes = 148` / `blockers = 48` / `ARENA_HALF_SIZE = 24` / 出生点 3m 无碰撞盒 / 围栏 `blocksShots === false` / **每件装饰物的盒子在两个列表里都能按坐标找到**。**下一轮要点亮关卡时，先跑这九条再看画面** |
 | **阶段 4 的原任务表路径与仓库不符**（`render/scene/level.ts` / `lighting.ts` / `bvh.ts` / `core/audio.ts` 都不存在） | ✅ 是（[§5.10.3](#5103-阶段-4-的产物路径按真实代码校正读码结论)） | 已按真实文件校正为 `levelView.ts` / `sceneRig.ts`（音频落在 **`platform/audio/`**）；**照计划期文件名动手会直接找不到文件** |
 | **表现层把"活着"与"是尸体"混成一个判据**（`claimed` vs `deadSince`）：`acquire()` 清 `deadSince`，而收尾循环用 `deadSince === null` 判尸体 → **每个活体每帧被当成尸体** | ✅ 是，阶段 4 的"尸体不投影"断言抓到的（[§5.11.4](#5114-实施中发现并修掉的真-bug两条都是读码--单测逼出来的)）。此前只表现为活体被反复施加又抹平的一个 1.1° 前倾，**截图与老断言都看不出来** | 同一个 slot 上答**两个问题**的字段不要合成一个判据（这是 [§4.1.1](#411-状态里两个都对的判据要选对阶段-2-的两个实测-bug) 那条教训的第四次出现）。**"一条断言通过"不等于"它测的那件事是对的"** |
 | **表现层每帧凭空 new 出容器**（`update()` 里的字面量 / `Set` / 数组） | ✅ 是，阶段 4 审计出 `main.ts` 的落点标记每帧 new 一个 `{...}`（一波轰炸 ≈ 每秒 180 个） | 已池化复用；`tests/views.test.ts` 新增"重复 update 不产生新对象"与"池子稳定在峰值并发数"两条断言。**改表现层时按这条自查**：60Hz 下每秒 60 个短命容器就是每秒 60 次 GC 压力 |
@@ -1209,7 +1229,7 @@ if (enemy.health <= 0) enemy.speed = ENEMY_SMALL.moveSpeed;
 | **接通"性能场景"**（先有制造 120 实体的手段，否则验收指标无法测） | `tools/desktop-acceptance.mjs`（`--scene perf`）+ `src/debug/perfScene.ts` + `PERF` 分组 | ✅ **代码完成**——`?scene=perf` 经 `DSH_GAME_SCENE` 传进页面，**没有往模拟层加分支**；⚠️ 真机读数未拿到（沙箱拒绝 Chromium） |
 | 全套音效（枪声 / 命中 / 换弹 / 敌人预警 / 爆炸 / 道具 / 波次 / 胜负） | `platform/audio/`（**程序化合成，零音频文件**） | ✅ **代码完成**（23 条配方 + 33 例单测）；⚠️ **听感未验收** |
 | 音频分层、并发声源上限、音量设置与静音键 | 同上 + `index.html`（veil 内面板）+ `input.ts` 的 `BINDINGS.mute` + `SETTING_KEYS` | ✅ 代码完成（六条总线 / 上限 24 / 节流窗口 / ducking / `M` 键 / `localStorage` 持久化） |
-| 程序化箱庭关卡美化（材质、道具、氛围）——**几何只能来自 `level.props` / `level.decor`** | `render/scene/levelView.ts` + `game/level.ts` | ✅ **只走 `decor`（6 → 18 项，新增 `pipeRun`）+ `COLORS` 调色**；`props` 尺寸/位置一寸未动，碰撞断言钉住 |
+| 程序化箱庭关卡美化（材质、道具、氛围）——**几何只能来自 `level.props` / `level.decor`** | `render/scene/levelView.ts` + `game/level.ts` | ✅ **只走 `decor`（6 → 18 项，新增 `pipeRun`）+ `COLORS` 调色**；`props` 尺寸/位置一寸未动，碰撞断言钉住。**阶段 6 追加**：`decor` 也变成了实体几何（+26 盒），尺寸进 `DECOR_SPECS`（[§5.17.3](#5173-装饰物变实体26-个新碰撞盒与一条只对-ai-成立的约束)） |
 | 光照与雾调优（含**修掉 `RENDER.fogNear` / `fogFar` 死字段**或删除它们） | `render/scene/sceneRig.ts` + `core/config.ts` | ✅ **死字段已删**，换成 `fogDensityPerArenaSpan` + `RENDER_TUNING` 单测；⚠️ **默认值一个未改**（没有画面就不调参） |
 | 对象池覆盖率审计 + GC 压力消除（含 `update()` 里的一切 `new`） | `render/fx/**`、`render/models/enemyView.ts` | ✅ 审计完成：修掉主循环每帧重建的落点标记 + `enemyView` 的 `claimed` 真 bug；[D15](#63-待决策项) 定案不抽公共池 |
 | 阴影 / 剔除优化（尸体不投影、静态几何的投影策略、阴影相机跟随的实测） | `render/models/enemyView.ts` + `sceneRig.ts` | ✅ 尸体不投影 + `RENDER.shadowExtent` 进表；⚠️ "值多少 ms"**没有读数** |
@@ -1799,7 +1819,7 @@ for (const enemy of enemies.targets) {   // 正序
 
 | 计划里的路径 | 真实位置 | 说明 |
 |---|---|---|
-| `render/scene/level.ts` | **`render/scene/levelView.ts`** | `game/level.ts` **是数据**（`props` / `decor` / `collisionBoxes` / `blockers`），视图是它的派生品。**美化几何时改的是 `game/level.ts` 的 `props`，同时会改掉碰撞与挡弹**——这是设计意图，也是最容易踩的雷 |
+| `render/scene/level.ts` | **`render/scene/levelView.ts`** | `game/level.ts` **是数据**（`props` / `decor` / `DECOR_SPECS` / `collisionBoxes` / `blockers`），视图是它的派生品。**改 `props` 的尺寸或位置会同时改掉碰撞与挡弹**——这是设计意图，也是最容易踩的雷；`decor` 自阶段 6 起同样派生碰撞与挡弹，只是尺寸来自 `DECOR_SPECS`（[§5.17.3](#5173-装饰物变实体26-个新碰撞盒与一条只对-ai-成立的约束)） |
 | `render/scene/lighting.ts` | **`render/scene/sceneRig.ts`** | 天空、雾、三盏灯（半球 + 主平行光 + 轮廓光）与阴影跟随全在这一个文件里 |
 | `render/scene/bvh.ts` | **不存在，且倾向不做** | 见 [D15](#63-待决策项)：权威判定是解析式 AABB，BVH 只可能加速表现层拾取 |
 | `render/fx/pool.ts` | **不存在** | 池子分散在 `effects.ts` / `spawnWarnings.ts` / `throwableView.ts` / `enemyView.ts`（共八处，[§3.5](#35-对象池与性能预算) 列了全表）。**抽不抽由 D15 定，判据是"是否真的减少了重复"** |
@@ -1919,7 +1939,9 @@ FATAL:mojo\public\cpp\platform\platform_channel.cc:108] Check failed: . : 拒绝
 - `decor` 从 6 项扩到 18 项：灯柱从四角扩成八点环（雾把围栏吃掉之后，灯是"这里是有意结束的"的唯一提示）、三根天线、四堆货箱、**新增 `pipeRun` 三种走向的管路**（给围栏一段水平线，是让 48 m 的方盒不像四面平墙的主要手段）。`Decor` 增加可选的 `yawDeg` / `length`。
 - `COLORS` 调色：地面压暗（1.1 m 的潜袭者剪影要保住对比）、货箱/油桶转暖、围栏提亮。**只改颜色**，因此 `collisionBoxes` / `blockers` 与阶段 3 逐字节一致。
 
-`tests/level.test.ts` 把这四件事钉住：**122 个碰撞盒 / 22 个遮挡盒 / `ARENA_HALF_SIZE = 24` 不变**（数字是硬编码的，因为改它就是改玩法空间，应该逼人回来改一个有理由的常量）、**出生点 3 m 内没有碰撞盒**（阶段 1 踩过"第一步撞箱子"）、**围栏仍然 `blocksShots === false`**、**decor 不在两个碰撞列表里**。
+`tests/level.test.ts` 当时把这四件事钉住：**122 个碰撞盒 / 22 个遮挡盒 / `ARENA_HALF_SIZE = 24` 不变**（数字是硬编码的，因为改它就是改玩法空间，应该逼人回来改一个有理由的常量）、**出生点 3 m 内没有碰撞盒**（阶段 1 踩过"第一步撞箱子"）、**围栏仍然 `blocksShots === false`**、**decor 不在两个碰撞列表里**。
+
+> ⚠️ **阶段 6 更正（本节其余内容仍是阶段 4 的事实）**：最后那一条——"decor 不在两个碰撞列表里"——**已经被推翻并反转**。现场反馈是"能穿过灯柱、货箱堆和管路"，于是每件装饰物都拿到了实体（+26 个盒子：148 / 48），而 `createCollisionWorld` 也改成读 `level.collisionBoxes` 这**一份**列表，不再从 `props` 另起一份。三条管路同时被挪到围栏边，以免在场上割出一条敌人 AI 走不出来的走廊。详见 [§5.17.3](#5173-装饰物变实体26-个新碰撞盒与一条只对-ai-成立的约束)。
 
 #### 5.11.6 阴影 / 剔除与本轮**没有**做的优化
 
@@ -2315,6 +2337,97 @@ npm run dev                                     # ③ 试听音效 + 打一局�
 
 ---
 
+<a id="517-阶段-6现场反馈的三项转身鼠标视角装饰物变实体"></a>
+#### 5.17 阶段 6：现场反馈的三项（转身、鼠标视角、装饰物变实体）
+
+**这一轮不是新阶段的功能扩张，是三句现场反馈**：
+
+> 1，增加转身的动作；2：视角可以随鼠标移动；3：游戏里所有的障碍物都增加实体和碰撞效果
+
+三句话对应三件完全不同性质的事：第 2 条**是一个 bug，而且是致命的**（下面 5.17.2 会说清楚它有多严重）；第 1 条是一个从来没做过的表现；第 3 条是阶段 4 一个**刻意的设计决定**被现场推翻。三件都**没有碰任何既有数值基线**。
+
+##### 5.17.1 转身动作：身体有自己的朝向，而判定不认它
+
+**现场看到的问题**：角色是"焊在准星上的炮塔"——`main.ts` 里那一行 `character.root.rotation.y = player.yaw + Math.PI` 让身体和相机**同一个角度、同一帧到位**。所以：
+
+- 侧向移动（按 A / D）时，角色**横着平移**，看上去不像在走；
+- 转身是**瞬间换向**，没有过程，读起来像被瞬移；
+- 而 `PLAYER.turnRateDegPerSec: 720` 这个字段从阶段 1 就躺在数值表里，**没有任何代码读过它**——一个改了没用的死旋钮（`.dsh/skills/box-garden-shooter/SKILL.md` §5.3 第 12 条明令不许留这种东西）。
+
+**改法**（`src/render/models/characterTurn.ts`，新增；纯数学、零引擎依赖）：
+
+| 问题 | 答案 |
+|---|---|
+| 身体该朝哪 | 走的时候朝**移动方向**（取自 `player.velocity`，不是输入意图——顶着箱子按 W 时速度是 0，身体该读作"站着"，而不是"原地跑步"）；站着的时候朝**相机**（这样才能"原地转身看四周"） |
+| 怎么转过去 | **限速**，不是阻尼：`PLAYER.turnRateDegPerSec = 720`，于是 180° 恰好 **0.25 s**，且 60 Hz 与 240 Hz 下**逐点相同**（阻尼是渐近的，"多久转完"没有答案） |
+| 跨 ±π 怎么办 | `shortestAngleTo` = `wrapAngle(to - from)`：走近路。漏了这一步的表现是角色**绕远路转一大圈**，看起来像卡了一帧 |
+| 怎么让"转身"看得见 | 转动时按剩余角度给一点**侧倾**（`bodyTurnBankGain`，上限 9°，`bodyTurnBankRate` 做指数回落）。角色是个胶囊体时，这几乎是唯一能看出"在转身"的东西 |
+| 会不会影响射击 | **不会，这是硬约束。** 弹道、移动解算、相机全部读 `player.yaw`；身体角度只写在 `Object3D` 上 |
+
+**顺手把这几行从 `main.ts` 搬进 `src/render/models/characterRig.ts`**：`sync(player, dt)` / `reset(yaw)` / `yaw` / `bank` / `state`。理由不是洁癖，是**可测性**：留在 `main.ts` 里它们需要一个 canvas、一个 renderer 和一个活的 `World` 才能跑，而 `InputState.update()` 那次事故证明了"测试够不到的那几行"会怎样（5.17.2）。搬出来之后 `tests/views.test.ts` 里 7 条断言直接驱动它：转身方向、摆位、斜倾上限与回落、按速度选 clip、死亡后 `reset` 把人扶起来。
+
+**两个附带修正**（都是读码时顺手发现的真问题）：
+
+1. **`characterStateFor` 里那个字面量 `0.15`** 进了数值表（`PLAYER.idleSpeedThreshold`），它同时也是"站着还是走着"的判据——同一个阈值管两件事，现在只有一处。
+2. **`CharacterModel.reset()`（新增）**：死亡 clip 是**故意黏住**的（`play` 在死亡保持里拒绝切走，这是对的），但重开一局时没人告诉模型"这一局结束了"——于是**点击重开后，角色会以死亡姿势站在场上一整局**。`restartRun()` 现在调 `character?.reset(world.player.yaw)`，`state` getter 让这件事变成可断言的事实（`tests/characterLoader.test.ts` + `tests/views.test.ts`）。
+3. **占位体加了朝向特征**（肩杠 + 面罩，都在模型 `+Z`）：胶囊体是旋转对称的，`player.glb` 未交付时**转身动作在画面上等于什么都没发生**。这是"美术没到位"的降级路径，所以特征必须由代码补上。
+
+##### 5.17.2 "视角随鼠标移动"：一条从发布起就存在的接线缺陷
+
+**这是本轮最重要的一条，而且它的严重性远超"一个功能没做"。**
+
+`InputState` 的设计是：`mousemove`（指针已锁定）→ 累加进 `pendingLookX/Y` → **由一个单独的 `update()` 把累加值折进"本 tick"** → `sample()` 读 `tickLookX/Y` → `endTick()` 清零。
+
+而 `main.ts` 的每步循环是：
+
+```ts
+const intent = perfScene ? perfScene.intent() : locked ? input.sample() : IDLE_INTENT;
+world.tick(dt, intent);
+input.endTick();
+```
+
+**`input.update()` 在整个 `src/` 里一次都没有被调用过。** 于是 `tickLookX / tickLookY` 恒为 0 ⇒ `InputIntent.lookDeltaX / lookDeltaY` 恒为 0 ⇒ `tickPlayer` 里的 `state.yaw -= intent.lookDeltaX * ...` 永远不减任何东西 ⇒ **鼠标完全不能转视角**。玩家能走、能开枪、能换弹，但只能朝出生方向看——**这就是现场第 2 条反馈的字面含义**。
+
+为什么 467 个测试全绿？因为**每一个读 `lookDelta` 的测试都是自己手搓 intent 的**（`tests/world.test.ts`、`tests/world-wave-loop.test.ts`、`tests/camera.test.ts`），而唯一实例化 `InputState` 的 `tests/input.test.ts` 当时只测指针锁定的失败路径——**没有任何测试同时用到"`InputState` + `sample()` + 位移"这三样**。这是 [`attach.ts` 脱绑定方法](#514-现场反馈的第二条启动即抛脱绑定的方法调用点击没反应的真因) 那次事故的同类：**缺陷不在任何被测函数里，而在"谁调用谁"上。**
+
+**修法：把这个折叠搬进 `sample()` 本身**（`update()` 与 `tickLookX/Y` 一并删除，`endTick()` 直接清累加器）。这不是"顺手重构"，而是**让那个错误在结构上不可表达**：读到 intent 只有一条路，而那条路必然带着本 tick 的全部鼠标位移。多步一帧的情形也仍然正确——第一步拿走全部位移，后续步读到 0。
+
+**钉住它的断言**（`tests/input.test.ts`，4 条，全部按"**不调用任何其它方法**就能读到位移"写，因为那条"其它方法"就是缺陷本身）：
+
+| 断言 | 它失败时是什么样 | 它通过时排除了什么 |
+|---|---|---|
+| 一次 `mousemove` 之后，紧接着的 `sample()` 就带 `movementX/Y` | 鼠标推了、视角不动（= 修复前的线上版本） | "位移存在但没人读"这一类 |
+| 一个 tick 内多次 `mousemove` 会被**求和** | 只有最后一次生效，快速划过时转得比手慢 | 累加器被覆盖写 |
+| `endTick()` 之后**不再重复生效** | 视角像被按住一样持续旋转 | 位移跨 tick 泄漏 |
+| 未锁定时完全不读鼠标 | 解锁后点击会突然甩一下视角 | "锁外位移被攒起来" |
+
+> ⚠️ **线上那份构建仍然带着这个缺陷**：`89c115e` 对应 `dist/assets/index-jm7IpmLP.js`（113,185 B），它是"鼠标不能转视角"的版本。**必须重新推一次 `main` 让 Actions 覆盖它**，§0.2 第 9 条那次"真人点一次"才有意义。
+
+##### 5.17.3 装饰物变实体：26 个新碰撞盒，与一条只对 AI 成立的约束
+
+**现场看到的问题**：能穿过灯柱、天线、货箱堆和管路——**"障碍物没有实体和碰撞"**。
+
+**它不是 bug，是阶段 4 的一个决定**：`decor` 通道被刻意排除在碰撞世界之外（`tests/level.test.ts` 当时甚至有一条断言**钉着**"decor 不在两个列表里"），理由是"美化关卡不该悄悄改玩法空间"。这个理由本身站得住，但**它换来的东西更糟**：玩家看得见的金属管路和货箱，走进去什么都没有，那读作"游戏坏了"，而不是"碰撞世界是刻意留空的"。
+
+**改法**：把装饰物的尺寸提成**单一真源**，再让两个消费者都从它派生——这正是 `props` 一直在用的模式。
+
+| 层 | 变化 |
+|---|---|
+| `game/level.ts` | 新增 `DECOR_SPECS`（每种件的尺寸）与 `decorCollisionBoxes(decor)`（纯函数，保守包围：圆柱取外接方盒、自身带 yaw 的箱子取外接方盒）；`buildLevel` 把派生出的盒子**同时**推进 `collisionBoxes` 与 `blockers` |
+| `render/scene/levelView.ts` | `buildDecor` 改为**全部读 `DECOR_SPECS`**——网格与碰撞盒是同一组数字的两种读法，灯柱不可能比挡住玩家的那个东西细 10 cm |
+| `game/player/player.ts` | `createCollisionWorld` 不再从 `props` **另起一份**推导，改为读 `level.collisionBoxes`，只丢掉"顶面不高于脚底"的那一个盒子（也就是地板）。原来那两份推导在装饰物变实体之前**恰好相等**，之后只有一份会知道这件事 |
+| 数量 | `collisionBoxes` 122 → **148**，`blockers` 22 → **48**（+26 = 8 灯柱 + 3 天线 + 4×3 货箱 + 3 管路）。两个数字都在 `tests/level.test.ts` 里**硬编码**，并在常量旁写清 +26 的构成 |
+
+**一条只对 AI 成立的约束，必须写在文档里而不是只写在断言里**：这三条管路（34 / 28 / 22 m）原本停在离围栏 2.5 m 处，而**敌人 AI 没有寻路**——它 seek 玩家、然后沿最浅轴被推出几何。一条横在刷怪带里的长盒子会在它身后割出一条 2.3 m 宽的走廊：刷怪点可以落在里面，而里面唯一的出路是沿着 34 m 滑到头。所以三条管路**贴到围栏边（`|坐标| = 23.0`）**，使它的场内面（22.75 m）落在刷怪边界（`SPAWN_LIMIT = 24 - 2.4 = 21.6 m`）**之外**——走廊从"进得去出不来"变成"根本进不去"。`tests/level.test.ts` 用"盒子在任一轴上完全位于（膨胀了敌人半径的）刷怪方框之外"来钉这条几何关系；**把管路挪回去，那条断言立刻红**。
+
+**其余装饰物为什么不需要这条规则**：灯柱 / 天线是细而孤立的（推出去就绕开了），货箱堆是 1.4 m 的孤立方块（沿最浅轴滑一下就到边缘）。**只有"长到能切断场地"的东西才会制造走廊**——这也是那条断言只覆盖 `pipeRun` 的原因，写在这里以免下一轮有人以为它覆盖不全。
+
+**顺带被这条改动修正的一件事**：`level.collisionBoxes` 在此之前**只有测试在读**（`src/` 里无人消费），"两份推导恰好相等"因此一直没有被发现的机会。现在它是唯一的一份。
+
+> ⚠️ **已知的、故意没做的事**：装饰物现在既挡人也挡子弹，**相机臂**也因此会把它们当作障碍（`clearBoom` 读的是 `blockers`）。一根 0.24 m 的灯柱挡子弹是物理正确的，但它同样会把镜头推开——如果现场反馈"贴着灯柱走时镜头会抖"，**先改的是"薄件是否该进 `blockers`"，不是 `CAMERA.collisionRadius`**（那是给箱子调的量）。
+
+---
+
 <a id="6-附录"></a>
 ## 6. 附录
 
@@ -2325,7 +2438,7 @@ npm run dev                                     # ③ 试听音效 + 打一局�
 | 分组 | 常量 | 关键值摘要 |
 |---|---|---|
 | 模拟 | `SIM` | 60 tick/s · 最长帧 0.25s · 每帧最多 5 步 · 场地半边长 24m |
-| 玩家 | `PLAYER` | HP 150 · 走 4.2 / 跑 6.4 m/s · 开镜 0.18s · FOV 78→45 · 俯仰 ±85° · 台阶高 0.45m · 贴地 0.25m |
+| 玩家 | `PLAYER` | HP 150 · 走 4.2 / 跑 6.4 m/s · 开镜 0.18s · FOV 78→45 · 俯仰 ±85° · 台阶高 0.45m · 贴地 0.25m · **（P6）身体转身 720°/s · 站立阈值 0.15 m/s · 转身倾斜 0.09 rad/rad（上限 9°、回落 12/s）** |
 | 相机 | `CAMERA` | 肩位 右 0.42 / 上 1.42m · 臂长 3.2m（开镜不改臂长）· 开镜肩位 0.34 · 跟随 18/s · 避障半径 0.3m · 枪口 右 0.26 / 下 0.16m |
 | 武器 | `WEAPON` | 30 发弹匣 · 640 RPM · 换弹 2.1s(空仓 1.7s) · 打断窗口 0.35s · 22 伤害 · 扩散 3.4°→0.35° · 每发 +0.5°（上限 7°）· 恢复 9°/s（开镜 ×2.6） |
 | 小型敌人 | `ENEMY_SMALL` | HP 60 · 5.2 m/s · 9 伤害 · 抬手 0.42s · 弱点 ×2.8 |
@@ -2498,4 +2611,4 @@ three-mesh-bvh   0.9.15
 
 ---
 
-*文档结束 · v1.11 · 最后同步：**阶段 5 代码与文档完成**（`npm run typecheck` exit 0 · `npm test` **23 文件 / 444 例全绿**，阶段 1–4 的 422 例一例不减 · `npm run build` 通过（53 模块，`index` 112.07 kB / gzip 38.29 kB，three 独立分包 628.12 kB））。阶段 5 落地：**S1–S6 六项交付决策全部定案并落地**（sourcemap 两面取向 / 版本 1.0.0 + ASCII exe 名 / 退出确认不做 / 程序化图标 `build/icon.ico` / Web 静态托管与缓存压缩策略 / 双端一致性判据）· **CSP meta**（含 `file:` 与 loopback `ws:` 两条删不得的源）· **`README.md` + [`docs/交付说明.md`](./交付说明.md)** · **`npm run preview` 实测**（全 200、零绝对引用、gzip / brotli 读数已量）· **修掉两个"只要不修就永远无法验收"的门槛缺陷**：`CANVAS_CONTENT` 读的是 `preserveDrawingBuffer: false` 的 WebGL 画布（同一次运行的截图里却是完整场景）→ 改成解析 CDP 截图并加一条"不含 HUD 的场景带"断言；D12 只白名单了 `Network.loadingFailed`，而同一个失败还走 `Log.entryAdded`（`logErrors` 仍未过滤）→ 两条通道改用同一套双向断言。另修两处"测了等于没测"（`requestCount: 0` 与"部分 `win-unpacked` 冒充产物"），并新增 `tests/acceptanceGate.test.ts`（10 例）与 `tests/shell.test.ts`（12 例）钉住。**仍未验收（环境限制，不是代码缺陷）**：打包 `.exe` 与 NSIS 安装包（`electron-builder` 在本机沙箱死于 `spawn EPERM`）· 渲染画面目视 · 真实 `.glb` 端到端加载 · 音效听感 · **全部真机性能指标**（只有 Node 侧下界 0.841 ms/tick）· 一局 10–15 分钟的实测局时 · 双端一致性读数 · 全部手感数值 —— 见 §0.2 与 [`docs/交付说明.md`](./交付说明.md) §4。**阶段 5 之后只剩 D4（是否接 Steamworks）这类"发布后"议题。***
+*文档结束 · v1.13 · 最后同步：**阶段 6（现场反馈三项）代码与文档完成**（`npm run typecheck` exit 0 · `npm test` **25 文件 / 497 例全绿**，阶段 1–5 的 467 例一例不减 · `npm run build` 通过（55 模块，`index` 116.22 kB / gzip 39.69 kB，three 独立分包 628.12 kB 未变））。阶段 6 落地：**转身动作**（`render/models/characterTurn.ts` 纯数学 + `characterRig.ts` 把身体整块搬出 `main.ts`，接上从阶段 1 起就没被读过的 `PLAYER.turnRateDegPerSec`）· **鼠标视角**（**这条是缺陷**：`InputState` 的位移折叠写在没人调用的 `update()` 里，线上那份构建根本不能转视角；现在折叠在 `sample()` 内，错误在结构上不可表达）· **所有装饰物变实体**（`DECOR_SPECS` 单一真源 + `decorCollisionBoxes`，`collisionBoxes` 122 → 148 / `blockers` 22 → 48；三条管路贴到围栏边，以免在敌人刷怪带里割出一条 AI 走不出来的走廊）· 附带修正 `CharacterModel.reset()`（重开后不再以死亡姿势站着）与占位体的朝向特征。**仍未验收（环境限制，不是代码缺陷）**：打包 `.exe` 与 NSIS 安装包（`electron-builder` 在本机沙箱死于 `spawn EPERM`）· 渲染画面目视 · 真实 `.glb` 端到端加载 · 音效听感 · **全部真机性能指标**（只有 Node 侧下界 0.627 ms/tick）· 一局 10–15 分钟的实测局时 · 双端一致性读数 · 全部手感数值 —— 见 §0.2 与 [`docs/交付说明.md`](./交付说明.md) §4。**⚠️ 线上那份构建（`89c115e`）必须被这次修复覆盖之后，"点开能玩"才有意义。** 之后只剩 D4（是否接 Steamworks）这类"发布后"议题。***

@@ -29,6 +29,7 @@
 import {
   AnimationClip,
   AnimationMixer,
+  BoxGeometry,
   Group,
   Mesh,
   MeshStandardMaterial,
@@ -95,6 +96,23 @@ export interface CharacterModel {
   play(state: CharacterState): void;
   /** Advances the mixer. `dt` is render time. */
   update(dt: number): void;
+  /**
+   * Un-dies: clears the death hold and returns to the idle pose.
+   *
+   * The death clip is deliberately sticky (`play` refuses to leave it), which is right for
+   * a run and wrong for the second one: without this, restarting after a death leaves the
+   * body lying in the arena for the whole of the next run.
+   */
+  reset(): void;
+  /**
+   * The state the model is actually in, which is not always the one that was asked for
+   * (`play('run')` out of the death hold is ignored by design).
+   *
+   * Exists so "the body stayed on the floor after a restart" is an assertion rather than a
+   * screenshot somebody has to remember to take. `null` when nothing has been played, and
+   * for the placeholder, which has no states at all.
+   */
+  readonly state: CharacterState | null;
   /** True when every requested state resolved to a real clip. */
   readonly complete: boolean;
   /** Clip names that were missing and had to be substituted. */
@@ -117,10 +135,20 @@ export interface CharacterLoadOptions {
  *
  * Deliberately the same silhouette the practice dummies use, so "the supplied model
  * has not arrived yet" looks like the project's own art rather than like a bug.
+ *
+ * It carries a **facing cue** — a shoulder bar and a visor on its `+Z` side — because a
+ * bare capsule has no front. Without one, everything the body does with its yaw (the turn
+ * toward the direction of travel, the lean into it) happens on screen as nothing at all,
+ * and the stand-in is what ships until the art arrives. `+Z` is the model's front: the
+ * composition root rotates the body by `yaw + π`, which is what maps a `+Z`-facing model
+ * onto this project's yaw convention (`0` faces `-Z`).
  */
 export function createPlaceholderCharacter(height: number, colour = 0x5a6472): CharacterModel {
   const root = new Group();
   root.name = 'character:placeholder';
+  // Yaw, then pitch, then roll — the camera convention, and the order in which the body's
+  // `rotation.y` and the turn's `rotation.z` mean "face this way, then lean".
+  root.rotation.order = 'YXZ';
   const material = new MeshStandardMaterial({ color: colour, roughness: 0.7, metalness: 0.15 });
   const geometry = new SphereGeometry(1, 12, 10);
   const body = new Mesh(geometry, material);
@@ -130,6 +158,29 @@ export function createPlaceholderCharacter(height: number, colour = 0x5a6472): C
   body.layers.disableAll();
   body.layers.enable(LAYER_DEFAULT);
   root.add(body);
+
+  // Everything below is the facing cue. Ordered after the body so the capsule stays the
+  // first mesh in traversal order, which is what `tests/characterLoader.test.ts` measures.
+  const cue = new MeshStandardMaterial({ color: 0x49525e, roughness: 0.75 });
+  const shoulders = new Mesh(new BoxGeometry(height * 0.62, height * 0.11, height * 0.2), cue);
+  shoulders.position.y = height * 0.95;
+  shoulders.castShadow = true;
+  shoulders.layers.disableAll();
+  shoulders.layers.enable(LAYER_DEFAULT);
+  root.add(shoulders);
+
+  const visorMaterial = new MeshStandardMaterial({
+    color: 0xff4d3d,
+    emissive: 0xff2a17,
+    emissiveIntensity: 1.1,
+    roughness: 0.35,
+  });
+  const visor = new Mesh(new BoxGeometry(height * 0.2, height * 0.09, height * 0.06), visorMaterial);
+  visor.position.set(0, height * 0.8, height * 0.25);
+  visor.layers.disableAll();
+  visor.layers.enable(LAYER_DEFAULT);
+  root.add(visor);
+
   return {
     root,
     play() {
@@ -138,12 +189,20 @@ export function createPlaceholderCharacter(height: number, colour = 0x5a6472): C
     update() {
       /* Nothing to advance. */
     },
+    reset() {
+      /* A capsule has no pose to clear. */
+    },
+    state: null,
     complete: false,
     missing: [],
     placeholder: true,
     dispose() {
       geometry.dispose();
       material.dispose();
+      shoulders.geometry.dispose();
+      cue.dispose();
+      visor.geometry.dispose();
+      visorMaterial.dispose();
     },
   };
 }
@@ -185,6 +244,12 @@ export function buildCharacter(
 ): CharacterModel {
   const root = new Group();
   root.name = 'character';
+  // The body's turn is written as `rotation.y` (facing) plus `rotation.z` (the lean into a
+  // pivot); `YXZ` is the order those two are authored in, matching the camera. With the
+  // default `XYZ` the same pair happens to multiply out identically as long as `x` is zero,
+  // which is exactly the kind of accident that stops being true the moment someone animates
+  // a pitch — so it is set explicitly. See `render/models/characterTurn.ts`.
+  root.rotation.order = 'YXZ';
   root.add(scene);
 
   // --- Normalise the scale ---------------------------------------------------
@@ -282,6 +347,19 @@ export function buildCharacter(
 
     update(dt) {
       mixer.update(dt);
+    },
+
+    reset() {
+      // Clearing `dying` first is the whole point: `play` is a no-op out of the death
+      // hold, so the fade below would otherwise be ignored and the body would stay down.
+      dying = false;
+      current = null;
+      mixer.stopAllAction();
+      currentAction = null;
+    },
+
+    get state() {
+      return current;
     },
 
     complete: missing.length === 0,

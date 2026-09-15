@@ -33,7 +33,30 @@ export const PLAYER = {
   accelerationTime: 0.18,
   /** Seconds to stop; lower is snappier. */
   decelerationTime: 0.12,
+  /**
+   * How fast the **body** pivots to face where it is going, in degrees per second.
+   *
+   * The camera yaw is the player's authority and is never rate-limited; this is the
+   * visible model catching up to it. 720°/s turns the character around in a quarter of a
+   * second, which reads as a deliberate pivot rather than a snap — and, because the shot
+   * direction comes from the player's own yaw rather than from the body, the animation
+   * never costs a fraction of a second of aim.
+   */
   turnRateDegPerSec: 720,
+  /**
+   * Ground speed below which the body faces the camera instead of the motion, in m/s.
+   *
+   * A player standing still and looking around should turn on the spot; a player walking
+   * should face where they are walking, even while looking somewhere else. This is the
+   * one threshold that decides which of the two the body is doing.
+   */
+  idleSpeedThreshold: 0.15,
+  /** Radians of bank per radian still left to turn: the lean into the pivot. */
+  bodyTurnBankGain: 0.09,
+  /** Cap on that lean, in degrees. A character rolled further than this reads as broken. */
+  bodyTurnBankMaxDeg: 9,
+  /** Exponential rate the lean settles at, e-folds per second. */
+  bodyTurnBankRate: 12,
 
   /** Aim-down-sights transition, seconds. */
   adsTime: 0.18,
