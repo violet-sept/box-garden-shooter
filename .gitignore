@@ -31,3 +31,13 @@ assets-source/
 *.blend
 *.psd
 *.fbx
+
+# Local model scratch (MMD `.pmx` etc). Kept out of the repository on purpose —
+# not only because they are large, but because the third-party models dropped here
+# carry their own terms (`请勿二次配布` / `请勿用于商业用途`, copyright miHoYo), so
+# republishing them in a public repo is not something this project can do. Convert to
+# `.glb` and use only assets you have the right to distribute.
+模型/
+*.pmx
+*.pmd
+*.vmd

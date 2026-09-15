@@ -4,6 +4,12 @@
 
 一套代码两端发布：**浏览器里打开即玩**（也可以挂成一个网址，见 §2.3），或**双击 Windows `.exe` 直接进**。两端加载的是同一份 `dist/`、同一个固定步长模拟、同一张数值表。
 
+> ## 🎮 在线游玩：<https://violet-sept.github.io/box-garden-shooter/>
+>
+> 点开即玩，不需要安装任何东西。首次进入**点一下画面**取得鼠标锁定（这是浏览器的硬性要求，桌面端也一样）。
+>
+> [![Deploy web build](https://github.com/violet-sept/box-garden-shooter/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/violet-sept/box-garden-shooter/actions/workflows/deploy-pages.yml) —— 推 `main` 即自动构建 + 全量测试 + 部署；线上 `index.html` 与两个分包已核对为**与本地 `dist/` 字节一致**（见 [`docs/交付说明.md`](docs/交付说明.md) §2.5）。
+
 ---
 
 ## 1. 操作
@@ -60,9 +66,11 @@ three 单独分包（`manualChunks`），因为它几乎不变、而游戏代码
 
 ### 2.3 发布成一个网址（GitHub Pages，不需要终端）
 
-**这个仓库可以直接变成一个"点开就玩"的链接**，因为产物是纯静态的、所有引用都是相对的（`base: './'`）。
+**这个仓库已经是一个"点开就玩"的链接**：**<https://violet-sept.github.io/box-garden-shooter/>**
 
-1. 把仓库推到 GitHub，**必须是 public**（免费账户的 Pages 只对公开仓库开放）。
+它不是另做的一份打包，而是**同一份产物 + 一次仓库设置**：产物纯静态、所有引用都是相对的（`base: './'`），所以能直接挂在子目录下。要在别处（fork 到另一个账号、换自定义域名）复现，只有两件事：
+
+1. 仓库必须是 **public**（免费账户的 Pages 只对公开仓库开放）。
 2. **Settings → Pages → Source 选 “GitHub Actions”**。
 
 之后每次推 `main`，[`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml) 会自动 `npm ci` → `npm test` → `npm run build` → 把 `dist/` 发到 Pages：

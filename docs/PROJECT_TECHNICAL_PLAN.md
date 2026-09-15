@@ -9,6 +9,7 @@
 > | 目标平台 | 浏览器（WebGL2 优先）· Windows 桌面端（Electron） |
 > | 单人开发周期 | 约 8 周（见 [§5 阶段计划](#5-阶段性项目实施计划)） |
 > | 当前进度 | **阶段 0 ✅ · 阶段 1 ✅ · 阶段 2 ✅ · 阶段 3 ✅ · 阶段 4 ✅ · 阶段 5 ✅ 代码与文档完成（24 文件 / 467 例全绿）**。阶段 5 交付了：S1–S7 **七项**交付决策落地 · CSP · 程序化图标 · `README.md` + [`docs/交付说明.md`](./交付说明.md) · **两个验收门槛缺陷的修复与单测** · **Web 端一键发布路径（GitHub Pages）**。⬜ **B 打包产物 / D 前序积压两组验收仍待一个普通（非沙箱）终端**；⬜ **Web 端"在浏览器里真的能玩"仍待一次真人点击**——**两者都不需要改代码**（清单见 [`docs/交付说明.md`](./交付说明.md) §4 与 §2.5） |
+> | **2026-09-15 实机进展（非沙箱终端首次实跑）** | ✅ **免安装产物首次产出**（`release\win-unpacked\box-garden-shooter.exe` 246,086,144 B · `resources\app.asar` 在位）· ✅ **外壳验收在新门槛下首次全绿**（`report-shell.json` `ok: true`：`requestCount 4` · 整帧 spread **235.51** / 场景带 **119.2** · 遮罩与指针锁定方向全对）· ✅ **渲染画面首次被人看过**。⬜ **NSIS 安装包未产出** · ⬜ **`--target packaged` 未绿**（脚本连不上调试端口 `EACCES`，而应用本身已启动并从 `app.asar` 加载了页面）· ⬜ **`--scene perf` 报告被中断未落盘**（但 F3 截图给出 **FPS 59 / step 0.80ms / draw 3.60ms / 130 实体**）· ⬜ 外壳那次 `fps 48.4` 需干净重测。全过程与三条待重跑命令见 [§5.16](#516-非沙箱终端首次实跑打包产物与三条待重跑的命令) |
 > | 事实核查 | 全部版本号与 API 行为已对一手来源核实，见 [§6.4](#64-事实核查与来源) |
 
 ---
@@ -34,7 +35,7 @@
 | **阶段 5 执行指导** | ✅ **[`docs/阶段5.md`](./阶段5.md)**（已执行完成，逐条结果在它 §8）—— 发布与打包的任务表、S1–S6 六项交付决策、离线打包路径、交付物清单、双端一致性回归法与最终验收清单 |
 | **阶段 5 实施纪要** | ✅ **[§5.12](#512-阶段-5-实施纪要供下一轮接续)** —— 本机边界（哪两组必须移交）· **两个"永远不可能变绿"的验收门槛缺陷**及其修法与单测 · 让"零外部请求"不再空转的强制 reload · 假产物守卫 · S1–S6 的落地位置 · CSP 里两条删不得的源 · 程序化图标与它自己踩的两个坑 · 三条新的环境坑 |
 | **交付说明** | ✅ **[`docs/交付说明.md`](./交付说明.md)** —— 产物清单与体积、Web 托管的压缩 / 缓存配置、**§2.5 GitHub Pages 一键发布与自定义子域名**、SmartScreen 口径、**非沙箱终端待补的四条命令**、S1–S7 决策表 |
-| **Web 上线路径** | ✅ **[§5.15](#515-web-上线一个-dist-挂到-github-pages)** —— `.github/workflows/deploy-pages.yml`（`npm ci` → `npm test` → `npm run build` → 发布 `dist/`）+ **运行时资产 URL 必须相对**这条硬规则。⬜ **尚未真的推上去过**，也**没有浏览器执行过那个页面**（本机沙箱起不了 Chromium） |
+| **Web 上线路径** | ✅ **[§5.15](#515-web-上线一个-dist-挂到-github-pages)** —— `.github/workflows/deploy-pages.yml`（`npm ci` → `npm test` → `npm run build` → 发布 `dist/`）+ **运行时资产 URL 必须相对**这条硬规则。**已经真的发布出去了**：**<https://violet-sept.github.io/box-garden-shooter/>**（2026-09-15，Actions run #2 全绿，线上三份产物与本地 `dist/` 逐字节一致，见 §0.1）。⬜ **但没有任何浏览器执行过那个线上页面**（本机沙箱起不了 Chromium）——"能玩"仍差一次真人点击 |
 | 待决策项 | D6 / D7 / D9 / D10 / D11 / D12 / D13 / **D2 / D3 / D5 / D14 / D15 均已定案**——见 [§6.3](#63-待决策项)。D14 = **全部程序化合成（零音频文件）**；D2 / D5 = **不做**（敌人美术模型、关卡手工建模）；D3 = **本轮先不引入 Bloom**（缺帧率读数，重开条件已写）；D15 = **`three-mesh-bvh` 与池子抽象都不做**。**阶段 5 新增 S1–S7 七项交付形态决策，同表定案** |
 | **未闭环缺陷** | ✅ 无已知 P1 级**代码**缺陷。四处**本机无法验证**的验收项：**渲染画面目视验收**（沙箱拒绝 Chromium）· **音效听感**（本轮新增，同样没听过）· **真实 `.glb` 从未加载过**（[§5.8.3](#583-真实-glb-从未被加载过读码结论)）· **打包 `.exe` 未回归**（阶段 5）。验收脚本的可选资产假阳性 **D12 已修**（[§5.9.1](#591-d12-验收门槛改成了双向断言)）；清理循环正序遍历 **C1 已顺手修掉并补断言**（[§5.9.5](#595-c1-清理循环改倒序并补上同-tick-全回收断言)）；**阶段 4 又修掉两条真 bug**（[§5.11.4](#5114-实施中发现并修掉的真-bug两条都是读码--单测逼出来的)） |
 | **全新的已知缺陷（阶段 4 末）** | ⚠️ **性能指标仍未被真机测量**：性能场景已接通、命令可复现，但本机沙箱拒绝 Chromium（命名管道 `0x5`），因此"120 实体 60 FPS"与"真机 `stepMs ≤ 2ms`"仍**没有读数**，只有 Node 侧下界（平均 0.841 ms，阶段 5 重跑）。⚠️ **手感/节奏数值仍未经真人试玩**（阶段 1 的债挂到阶段 4，两轮**刻意未动**——没有读数就不调参） |
@@ -44,10 +45,19 @@
 
 | 命令 | 实测结果 |
 |---|---|
+| `npm run desktop:build -- --config.electronDist=node_modules/electron/dist`（**2026-09-15，非沙箱终端**） | ✅ **免安装产物首次产出**：`release\win-unpacked\box-garden-shooter.exe` **246,086,144 B**（比 `node_modules` 里原始 `electron.exe` 大 **15,872 B**，即 rcedit 已写入图标与版本信息）· `resources\app.asar` **在位**（验收脚本的"假产物"守卫因此通过）· `builder-debug.yml` 的 `files` 与 `electron-builder.yml` 逐条相符（含 `!**/*.map`）。⬜ **NSIS 安装包仍未产出**：`release\` 下没有 `箱庭射击-1.0.0-win-x64.exe`，而 `%LOCALAPPDATA%\electron-builder\Cache\nsis-3.0.4.1` 的创建时间与 `builder-debug.yml` **是同一秒**——即 NSIS 步骤**已启动过**却没留下产物，需重跑并保留终端输出 |
+| `npm run desktop:accept`（**非沙箱终端**，`.tmp-accept/report-shell.json`，2026-09-15 19:40） | ✅ **`ok: true`——新验收门槛（[§5.12.1](#5121-两条再怎么跑也永远不会变绿的验收断言本轮最重要的发现)）第一次在真实运行上全绿**：`launched: true` · WebGL2 未丢失 · 启动时 `veilCovers: true` / `hudHidden: true` → 点击后 `veilHidden: true` / `hudHidden: false` / `pointerLock: "app"`（方向全对）· `requestCount: 4`（强制 reload 生效，不再是空转）· `failedRequiredLoads: 0` · `logRequiredErrors: 0`（两条豁免都点名 `player.glb`）· **整帧 spread 235.51 / 场景带 spread 119.2**（阈值 12，两条断言都过）· 零 console error / 零未捕获异常 / 零非 `file://` 请求。⚠️ 同一次读数里 `frames.fps = 48.4`、最长帧间隔 **55.4 ms**——**低于 60 FPS 目标**，但该测量窗口只有 1.5 s 且与另外两次运行挤在同一分钟内，**需要一次干净的重测**才能当结论 |
+| 同一份 `screenshot-shell.png`（2379×1296）**目视核对** | ✅ **阶段 2 起积压的"渲染画面目视验收"首次被真的看了一眼**：竞技场地面与围栏、橙色木箱、红色油桶、灯环、玩家投影都在画面里；HUD 三处读数（生命 150/150 · 道具 [E] 3 · AR-15 29 / 210）与报告里的 `afterClick` 逐字相符；**画面中央是程序化胶囊体**——`player.glb` 未交付的**已知降级**，控制台同步告警。⬜ 仍未闭环：**两种敌人一眼可辨**（这张图里没有 Warden）与阶段 3 的**投放预警 / 投掷物 / 爆炸 / 结算**四处画面 |
+| `.tmp-accept/screenshot-shell-perf.png`（**`--scene perf` 被中断，未落报告**） | 🟡 **F3 面板给出了真机读数**：`FPS 59 · TPS 62 · step 0.80ms · draw 3.60ms · steps/frame 2 · dropped 1 · wave 1/8 · enemies 130 · seed 276646397`。即 **模拟 tick 0.80 ms ≤ 2 ms 达标**，帧率 59 ≈ 60，与 Node 侧下界（0.841 ms）相互印证。⚠️ 这是**从截图里读出来的**，不是验收脚本写的 `perf` 对象；`report-shell-perf.json` 仍是 2026-09-14 那份沙箱报告——**需要一次跑完的 `--scene perf`** |
+| `npm run desktop:accept -- --target packaged`（**非沙箱终端**，`.tmp-accept/report-packaged.json`，2026-09-15 19:39） | ❌ **`ok: false`，但失败点在验收脚本这一侧**：`launch: devtools endpoint never came up (connect EACCES 127.0.0.1:9333)`。同一份 `stderr` 证明**应用本身启动成功**：`DevTools listening on ws://127.0.0.1:9333/...`，并从 **`app.asar` 内部**加载了页面（`file:///E:/…/release/win-unpacked/resources/app.asar/dist/assets/index-jm7IpmLP.js`，随后打出 `[character] no model … using the procedural stand-in`）。**`EACCES`（WSAEACCES 10013）不是"端口被占用"**：`netsh int ipv4 show excludedportrange protocol=tcp` 实测只有 `50000–50059` 与 `54235`，**不含 9333**。最可能是新生成的未签名 exe **首次**监听回环时被防火墙 / WFP 拦下的一过性结果——几分钟后同一个 9333 被早已被系统放行的 `electron.exe` 正常使用（同一分钟的外壳验收就是绿的）。**对策：重跑一次；仍失败就换 `--port 9411`** |
+| 两条**被中断**的运行（2026-09-15 19:40） | ⚠️ `--scene perf` 与随后那次 `auto` 的 packaged 阶段都**没有写下报告**，`.tmp-accept` 里只留下 `stdout/stderr/screenshot`。原因：**报告与终判只在脚本跑完时才落盘**，而 `perf` 还要额外 8 s 测量，两次都在中途被 Ctrl+C / 关窗。**下一轮务必让命令自己结束**。附带一条无害噪声：perf 那次 `stderr` 里的 `[shell] failed to load build output … ERR_ABORTED (-3) loading '…?scene=perf'`，是**脚本强制 `Page.reload` 撞上了 shell 仍在飞的首次导航**——同一次运行的截图里 perf 场景已经正常在跑（`wave 1/8 · enemies 130`），不是加载失败 |
 | `npm run typecheck`（**阶段 5 收尾重跑**） | exit 0，无输出 |
 | `npm test`（**S7 落地后重跑**） | **24 文件 / 467 例全绿**（约 2.6s）：**阶段 4 的 21 文件 / 422 例一例不减** + `acceptanceGate` **13** · `shell` **17** · `input` **11**（`audio` 37 含收尾新增的 4 例真总线回归） |
 | `npm run build`（**S7 落地后重跑**） | ✅ 53 模块；`dist/index.html` **8,467 B（gzip 3,291 / br 2,669）** · `assets/index-jm7IpmLP.js` **113,185 B（gzip 38,544 / br 33,245）** · `assets/three-DfhEDeNO.js` 628,128 B（gzip 156,919 / br 128,068）· 两份 `.map` 709,587 B / 3,039,839 B（以上均为磁盘字节 + 本地 `node:zlib`；Vite 自报的 gzip 略大，属口径差异）。只有一条 chunk 体积提示，无报错 |
 | `dist/` 子目录挂载实测（**S7**） | ✅ 用一个只认 `/box-garden-shooter/` 前缀的本地静态服务（Pages 项目站的形状）取 `index.html` + 两个分包 + 两份 `.map`：**全部 `200`，服务端字节与磁盘 SHA256 逐一致**；`index.html` 的两条引用实测都是 `./assets/...`；整包 `http(s)://` 计数 **2**（不可请求）、`eval(` / `new Function(` 计数 **0**；相对资产 URL 在三处基准下的解析实测：`https://<user>.github.io/<repo>/` → `.../<repo>/assets/models/player/player.glb`、`https://<user>.github.io/` → `.../assets/...`、`file:///…/dist/index.html` → `file:///…/dist/assets/...` |
+| **GitHub Actions 首次真跑**（**2026-09-15**） | 🔶 **run #1 红在 `npm ci`**（`build` 步骤 1–3 绿、4 红、5–8 跳过，`deploy` 未运行），**run #2 全绿**（`Install dependencies` → `npm test` → `npm run build` → `configure-pages` → `upload-pages-artifact` → `deploy` 全 success）。**run #1 的根因未证实**：CI 日志要仓库权限（本机 `403`），两处修法（`--ignore-scripts` 与源回退）同时改的，无法互相区分——见 §0.2 第 9 条 |
+| **线上产物核对**（**2026-09-15**） | ✅ `https://violet-sept.github.io/box-garden-shooter/` → `GET /` **200**，`index.html` **8,467 B 与本地 `dist/index.html` SHA256 相同**；`assets/index-jm7IpmLP.js` **113,185 B**、`assets/three-DfhEDeNO.js` **628,128 B** 同样**逐字节一致**；`assets/models/player/player.glb` → **404**（预期：资产从未交付）。即**线上跑的正是本机验证过的那份字节** |
+| **打包产物验收**（**2026-09-15 19:50**，非沙箱终端） | 🔶 **产物真的跑起来了，但报告是 `ok: false`** —— 这是**尚未结案**的一条，不要记成"打包产物已通过"。跑通的部分：`release/win-unpacked/box-garden-shooter.exe` 真实启动（`launched: true`）· WebGL2 未丢失 · 指针锁定拿到 · **零 console error · 零未捕获异常 · 零必须加载失败（`failedRequiredLoads: []`）· 零外部请求（`externalRequests: []`，`requestCount: 4`）** · 截图有内容（整帧 spread **254.93** / 场景带 **152.33**）· 唯一的降级告警是预期内的 `[character] no model at "./assets/models/player/player.glb"`，且它的失败 URL 是 `.../resources/app.asar/dist/assets/models/player/player.glb`——**顺带证明相对路径在 `app.asar` 里解析正确**。**失败的三条全是遮罩断言**："点击前遮罩已经隐藏" · "遮罩没有真的盖住画布" · "遮罩还在时 HUD 已经可见"，即那次探测看到的是**已经进入游戏之后**的状态。**待查方向**：工具的时序（强制 reload 与探测 / 点击的先后）还是打包启动路径与外壳不同——**下一次运行要带日志看**，别先改断言 |
 | `npm run preview` + HTTP 实测（**阶段 5**） | ✅ `/` 与两个分包全部 `200`，字节数与 `dist/` 中文件逐一相符；构建产物**零绝对 / 外部引用**；`index.html` 随产物下发 `Content-Security-Policy`。gzip / brotli 读数见上（本地用 `zlib` 量的，不依赖托管方） |
 | `dist/` 静态检查（**阶段 5**） | ✅ 整包只有两条 `http(s)` URL：`http://www.w3.org/1999/xhtml`（XML 命名空间字符串）与 `https://jcgt.org/published/0007/04/01/`（three.js 源码注释），**均不会被请求**；构建产物中 `eval(` / `new Function` 匹配数为 **0** |
 | `npm run desktop:accept -- --target shell`（**阶段 5，本机沙箱内**） | ❌ **仍停在沙箱边界**（`platform_channel.cc ... 0x5`），报告与日志落盘。**这不是回归**：工具、报告路径与断言链路都已接通，缺的只是能跑 Chromium 的终端 |
@@ -82,10 +92,13 @@
    - ✅ **外壳验收通过**：在非沙箱终端里 `npm run desktop:accept` 真实启动 `electron/main.cjs`，拿到指针锁定、帧时钟在跑、零错误、零外部请求，并留下截图。**"Electron 起不来"这个结论只对沙箱成立**（[§5.3.1](#531-桌面端为什么在沙箱里起不来)）。
    - ✅ **二进制 / 配置 / 工具 / 依赖分类都已就位**（[§5.6.5](#565-桌面端验收这一轮做到哪一步)）。
    - ✅ **阶段 5 又把打包链往前推了一站**：换用与缓存无关的 Electron 来源后，`electron-builder` 走完了**配置加载 + Electron 框架拷贝**，最终停在模块收集器的 `spawn EPERM`（[§5.12.0](#5120-先说边界本机做完了什么什么必须移交给普通终端)）。**离线打包的参数写法也在这一轮被纠正**（短写法 `-c.electronDist=` 会被当成配置文件）。
-   - ❌ **`release/win-unpacked/` 与 NSIS 安装包仍然都不存在**，因此 `--target packaged` 一步从没跑过。
-   - ➡️ **待办**：普通终端里 `npm run desktop:build -- --config.electronDist=node_modules/electron/dist` → `npm run desktop:accept -- --target packaged`。清单见 [`docs/交付说明.md`](./交付说明.md) §4。
-2. **渲染画面仍未通过目视验收 —— 已不再是被缺陷阻塞，而是被环境阻塞。** 遮罩缺陷本身已在阶段 2 修好并补上真断言（[§5.7.3](#573-启动遮罩缺陷已修复并补上真断言)）。剩下的问题是：本机受限沙箱**拒绝任何 Chromium 进程**（命名管道 `0x5`，[§5.3.1](#531-桌面端为什么在沙箱里起不来)），因此始终**没能自己拿到画面截图**。逻辑层的替代证据已补齐（两种剪影高度差、预警环一一映射、尸体不残留、模型降级链、`decor` 数量、爆炸衰减曲线），但"眼睛看着能分清两种敌人"这一条**仍未验收**。
+   - 🟡 **2026-09-15 更新：`release\win-unpacked\` 已经产出**（`box-garden-shooter.exe` 246,086,144 B，比原始 `electron.exe` 大 15,872 B，即 rcedit 的图标与版本信息已写入；`resources\app.asar` 在位，验收脚本的"假产物"守卫通过）。**NSIS 安装包仍未产出**——`release\` 下没有 `箱庭射击-1.0.0-win-x64.exe`，而 electron-builder 缓存里 `nsis-3.0.4.1` 的时间戳与 `builder-debug.yml` 是同一秒，说明 NSIS 步骤**已启动过**；要定性就得重跑并保留终端输出。
+   - 🟡 **`--target packaged` 仍未绿，但这一次不是应用的问题**：报告里的失败是 `devtools endpoint never came up (connect EACCES 127.0.0.1:9333)`，而同一份 stderr 证明应用**启动成功**并从 `app.asar` 里加载了页面。`EACCES` 不是"端口被占用"（排除区间实测不含 9333），最可能是新生成的未签名 exe 首次监听回环时被防火墙 / WFP 拦下的一过性结果。**对策：重跑；仍失败就 `--port 9411`。**
+   - ➡️ **待办**：重跑 `npm run desktop:accept -- --target packaged`（期望 `report-packaged.json` 里 `ok: true`），并把 NSIS 那一步跑完。清单见 [`docs/交付说明.md`](./交付说明.md) §4。
+2. 🟡 **渲染画面已经被人看过一次，但"两种敌人一眼可辨"仍未验收。** 遮罩缺陷本身早在阶段 2 就修好并补上了真断言（[§5.7.3](#573-启动遮罩缺陷已修复并补上真断言)）；**2026-09-15 的 `screenshot-shell.png` 是阶段 2 以来第一张"真的被看过"的实机画面**（竞技场、木箱、油桶、灯环、投影与 HUD 三处读数全在，见 §0.1），画面中央的程序化胶囊体是 `player.glb` 未交付的**已知降级**。**仍未闭合的是两件具体的事**：① 现有两张截图里只有 Stalker，**没有一张能证明"两种敌人一眼可辨"**（Warden 一次都没出现在画面里）；② 阶段 3 的**投放预警 / 投掷物 / 爆炸 / 结算**四处表现层**也还没有画面**。这两条需要的只是"打一局并截图"，**不需要改代码**。
    > 阶段 5 补充了一条**间接**证据：上一次实机运行留下的 `screenshot-shell.png`（2379×1296）被阶段 5 的 PNG 解码器读开并量过——竞技场、货箱、三个带青色发光带的潜袭者与 HUD 都在画面里，整帧 luma 对比度 241.16。**这证明"那次运行确实画出了场景"，但它不是一次新的目视验收**，不能替代"看一眼两种敌人是否可辨"。
+   >
+   > **2026-09-15 更新**：这一条现在由 [§0.1](#01-本轮实测证据可复现) 里那次非沙箱运行的 `screenshot-shell.png`（整帧 235.51 / 场景带 119.2）**接替**——那一张已经真的被看过，结论同上：**画面没问题，缺的是"包含 Warden 的一局"**。
 3. **音效已经存在，但没有任何人听过。** 阶段 4 按 [D14](#63-待决策项) 把音效做成了**全部程序化合成**（`platform/audio/**`，零音频文件），映射、增益、节流、并发、静音规则都有单测（`tests/audio.test.ts` 33 例），`[HITLOG]` 也加了 `sfx` 一路。但"四种敌人提示音可盲听区分"、"枪声与枪口火光同帧"、"首次点击前不报错"都**需要真机 + 耳朵**：本机沙箱拒绝 Chromium，因此这三条**未验收**。**好消息是"音频文件加载失败"这条假阳性路径已经被整块消掉**——`public/` 不存在这件事对音效不再有任何影响。
 4. **手感数值是未经试玩的起始基线——阶段 4 与阶段 5 都刻意没有动它们。** `src/core/config.ts` 里的射速、后坐力、扩散、移速、ADS 过渡、敌人节奏、导演节奏都还没有被真人手感验证过。**阶段 5 没有调参授权**，因此 `PLAYER` / `CAMERA` / `WEAPON` / `ENEMY` / `WARDEN` / `DIRECTOR` / `ITEMS` / `AUDIO` 与阶段 4 **逐字相同**：没有读数的调参等于换一个随机数。**要么补一局真人局读数，要么接受"数值是起始基线"交付。**
 5. **真实的 `.glb` 从未被加载过——只跑过降级分支。** `public/` 目录**根本不存在**（枚举 `public` 无任何文件），所以 `PLAYER_MODEL_URL`（S7 之后是相对路径 `'./assets/models/player/player.glb'`，见 [§5.15](#515-web-上线一个-dist-挂到-github-pages)）每次启动都是一个取不到的地址，`loadCharacter` 每次都走 catch → 程序化胶囊体。因此"把 `.glb` 放进指定目录、不改代码即被加载并驱动动画"这条验收标准，**只被单测验证过**（`tests/characterLoader.test.ts` 的 12 例用内存里造的 glTF 场景），**端到端从未跑过**。`README.md` §4 与验收表都按这个口径写。
@@ -93,34 +106,38 @@
    > ⚠️ **阶段 5 的更正：D12 只修了一半。** 它白名单了 `Network` 通道，但**同一个失败还走 `Log.entryAdded`**，而未过滤的 `logErrors.length === 0` 仍然是硬失败——所以"可选资产假阳性"其实一直没消失，只是换了条通道（那次实机运行的报告里 `logErrors: ["network: Failed to load resource: net::ERR_FILE_NOT_FOUND"]` 就是铁证）。阶段 5 把两条通道改成同一套双向断言，并用 `tests/acceptanceGate.test.ts` 钉住，详见 [§5.12.1](#5121-两条再怎么跑也永远不会变绿的验收断言本轮最重要的发现)。
 7. ✅ **已闭环（阶段 3 / C1）：清理循环已改倒序，并补上"同 tick 全回收"断言。** 下面是这条低危内部不一致的原貌：`World.tick` 的清理循环用**正序** `for...of` 遍历 `enemies.targets`，而 `EnemyStore.despawn → retire` 用的是"末尾换入空位"的 O(1) 删除，正序遍历因此**可能跳过**某个死掉的条目，把它留到下一 tick 才回收。被跳过的条目 `alive` 已经是 `false`，所以**命中查询（`hitscan.ts` 第 153 行 `if (!target.alive) continue`）与 `aliveCount` / `liveCount` 都不受影响——它不等于阶段 2 那个泄漏**，不产生可观察的玩法后果。真正的问题是它与 `retire()` 里"nothing iterates it positionally"的注释相矛盾，而 `reset()` 为了同样的理由用的是倒序。详见 [§5.8](#58-阶段-3-开工前的新发现读码与实测) 的 C1。
 8. ⬜ **（阶段 5 新增）双端一致性从未被读数验证过。** 结构上的保证是成立的（两端加载**同一份 `dist/`**、同一份固定步长、同一张 `config.ts`），但 S6 选的判据是**同种子 `--scene perf` 两端各跑一次比对 `ticks` / `kills`**——这一步**没做**。同样未做的还有 WASD / 左键 / 右键 / `R` / `E` 五项在两端的人工确认。理由同第 1、2 条：本机跑不了桌面端，也跑不了浏览器。
-9. ⬜ **（S7）Web 端"点开链接就能玩"仍然只缺一次真人点击。** 仓库里已经有发布路径（[§5.15](#515-web-上线一个-dist-挂到-github-pages)），HTTP 层的证据也补齐了（子目录挂载、字节一致、零绝对引用），但**本机没有任何 Chromium 进程能起来**，所以：① **这一轮改动之后没有任何浏览器执行过那个页面**——"上一轮修掉的启动缺陷 + 这一次的相对路径修复"合起来是否真的能玩，需要你点一次；② **工作流一次都没真的跑过**（首次触发是推 `main` 之后）。**这两件事都不需要改代码，也不需要普通终端**。
+9. 🟡 **（S7）Web 端已经发布成功，只剩"一次真人点击"这条证据。** 仓库里已经有发布路径（[§5.15](#515-web-上线一个-dist-挂到-github-pages)），HTTP 层的证据也补齐了（子目录挂载、字节一致、零绝对引用）。**2026-09-15 又补齐了两条此前完全没有的事实**：① **工作流已经真的跑过两次**——run #1（`c2c5746`）`failure`、run #2（`32257a0`）`success`（GitHub Actions 记录实测）；② **站点实测 `HTTP 200`**（`https://violet-sept.github.io/box-garden-shooter/`，抓回来的 HTML 里标题、操作说明、静音面板与静态 CTA `正在载入…` 都在）。⬜ **仍然没有任何浏览器执行过那个页面**：静态 CTA 只在脚本跑过之后才会被替换，纯文本抓取看不到这一步，所以"点开能玩"仍待你点一次。**不需要改代码，也不需要普通终端。**
 
 ### 0.3 下一轮的第一件事（按优先级）
 
 > **阶段 5 的代码与文档已经完成。** 剩下的**没有一件需要改代码**——两组未验收的证据只能在普通（非沙箱）终端里补。完整清单与判据见 [`docs/交付说明.md`](./交付说明.md) §4；本节只给最短路径。
 
-1. **先打包，再验收产物**（这是阶段 5 唯一还没跑过的一步）：
+1. **打包那一步已经成功了，只剩"把 NSIS 跑完 + 让 packaged 验收变绿"**（2026-09-15 已实跑一次，全过程见 [§5.16](#516-非沙箱终端首次实跑打包产物与三条待重跑的命令)）：
 
    ```powershell
    cd E:\AiAgent\deepseekHarness2.0
-   npm run desktop:build -- --config.electronDist=node_modules/electron/dist   # 零网络打包；长参数形式是必须的
-   npm run desktop:accept -- --target packaged                                 # 期望 report-packaged.json 里 ok: true
+   npm run desktop:build -- --config.electronDist=node_modules/electron/dist   # 零网络打包；长参数形式是必须的；务必让它自己跑完
+   npm run desktop:accept -- --target packaged                                 # 期望 report-packaged.json 里 ok: true；若报 EACCES 就加 --port 9411
    ```
+
+   上一次的结果：`release\win-unpacked\` ✅ 产出（`app.asar` 在位），但 **NSIS 安装包没出现**，且 `--target packaged` 连不上调试端口（`EACCES 127.0.0.1:9333`，**而应用本身已启动并从 `app.asar` 加载了页面**）。**重跑时记住两点**：① 打包与验收都要**让它自己结束**——报告与终判只在结尾落盘，中途 Ctrl+C 会什么都不留下；② `EACCES` 是"新 exe 第一次监听回环"的一过性结果，不是端口占用。
 
    然后**人工双击一次** `release\win-unpacked\box-garden-shooter.exe`：能进游戏、`M` / `F3` / `F4` 可用、图标不是 Electron 默认图标、首次运行弹出的 SmartScreen 属预期。
 
 2. **再补阶段 2 / 3 / 4 积压的目视、听感与真机帧率**（三条命令 + 一次试听 + 一局）：
 
    ```powershell
-   npm run desktop:accept -- --scene perf   # 真机 fps / stepMs / renderMs / 最长帧 + 密集敌群截图（B 组）
-   npm run desktop:accept                   # 普通场景截图 + 控制台干净度（C 组）
+   npm run desktop:accept -- --scene perf   # 真机 fps / stepMs / renderMs / 最长帧 + 密集敌群截图（B 组）——内部还有 8 s 测量，要等它结束
+   npm run desktop:accept                   # 普通场景截图 + 控制台干净度（C 组）——上一次的 packaged 阶段就是在这里被中断的
    npm run dev                              # 试听音效（点击开始后）；顺手打一局，记局时与卡点
    ```
+
+   > **2026-09-15 的经验**：那一次 `--scene perf` **被中断，报告没落盘**，但留下的 F3 截图读到了 **`FPS 59 · step 0.80ms · draw 3.60ms · steps/frame 2 · 130 实体`**——"120 实体 60 FPS"与"模拟 tick ≤ 2 ms"两个目标**看起来都够**，**只差一次跑完的脚本判据**。同一次外壳验收的 `fps 48.4` / 最长帧 55.4 ms 也**需要一次干净的重测**（那次窗口只有 1.5 s，且与另外两次运行挤在同一分钟内）。
 
    拿到的读数写进 [§0.1](#01-本轮实测证据可复现) 的证据表；截图至少看一眼"两种敌人一眼可辨"（阶段 2 积压）、"投放预警 / 投掷物 / 爆炸 / 结算画面"（阶段 3 积压）、"密集敌群下的帧率"（阶段 4）。
 3. **`--scene perf` 的读数决定两件事**：① "120 实体 60 FPS"与"模拟 tick ≤ 2ms"是否达标；② [D3](#63-待决策项) 的 Bloom 要不要开（重开条件写在决策表里）。**没有读数之前不要开任何后处理**，也不要为了 `fps` 数字去调 `maxStepsPerFrame`。
 4. **最后做 S6 的双端一致性回归**：两端各跑一次 `?scene=perf` / `--scene perf`，比对 `ticks` / `kills`（应逐点一致）与两端 `fps`（均应 ≥ 59），并把五项操作在两端各确认一遍。
-5. **（独立于上面四条，随时可做）把 Web 端挂成一个网址**：仓库推上 GitHub（**public**）→ **Settings → Pages → Source = “GitHub Actions”** → 推 `main` 即自动发布到 `https://<user>.github.io/<repo>/`。**不需要本机、不需要普通终端、不需要改代码**，步骤与坑见 [`docs/交付说明.md`](./交付说明.md) §2.5。发布后**第一件事是用真实浏览器点一次**——那是第 9 条未验收项唯一的闭环方式。
+5. **（已经做完，只剩"点一次"）Web 端已经在线**：`https://violet-sept.github.io/box-garden-shooter/` 实测 **`HTTP 200`**，工作流两次运行（#1 `failure` → #2 `success`，2026-09-15）。**剩下的唯一一步是用真实浏览器点一次**——那是第 9 条未验收项唯一的闭环方式。步骤、坑与"国内连通性不作承诺"的口径见 [`docs/交付说明.md`](./交付说明.md) §2.5。**不需要本机、不需要普通终端、不需要改代码。**
 
 > ⚠️ **不要**为了让上面任何一条变绿去放宽断言。阶段 5 修掉的那两条断言（[§5.12.1](#5121-两条再怎么跑也永远不会变绿的验收断言本轮最重要的发现)）之所以必须修，正是因为它们**测的不是它们声称在测的东西**——改的是测量对象与分类方式，阈值与"零容忍"的方向一寸没让。
 
@@ -1223,7 +1240,7 @@ if (enemy.health <= 0) enemy.speed = ENEMY_SMALL.moveSpeed;
 | Electron 打包配置（图标、版本、公司信息） | `electron-builder.yml` | ✅ `appId` / `productName` / NSIS / `npmRebuild: false` + **`build/icon.ico`（程序化生成，含 256×256）** + **版本 `1.0.0`** + **`win.executableName: box-garden-shooter`（S2 / S4）** |
 | 窗口行为（默认尺寸/最小尺寸/全屏/退出确认） | `electron/main.cjs` | ✅ 默认 1600×900 / 最小 1280×720 / `autoHideMenuBar` / 单实例行为；**"退出确认"定案为不做（S3）**，理由是需要新增 IPC 通道，`tests/shell.test.ts` 钉住 |
 | `contextIsolation: true` + 最小 preload 暴露面 | `electron/preload.cjs` | ✅ 已就位（`contextIsolation: true` / `nodeIntegration: false` / `sandbox: true`，preload 只暴露一个冻结的 `{ isDesktop, electron }`），阶段 5 复核未变并由单测钉住 |
-| Web 端部署（静态托管 + gzip/brotli） | [`docs/交付说明.md`](./交付说明.md) §2 | ✅ 定案并写明（S5）：静态托管 + 托管方压缩 + 内容哈希长缓存 / `index.html` no-cache；**本地已用 `npm run preview` 实测**（全 200、零绝对引用），gzip / brotli 读数已量。⬜ 实际上传由托管方完成 |
+| Web 端部署（静态托管 + gzip/brotli） | [`docs/交付说明.md`](./交付说明.md) §2 | ✅ **已上线**：<https://violet-sept.github.io/box-garden-shooter/>（S7，Actions run #2 全绿；线上产物与本地 `dist/` 逐字节一致）。静态托管 + 托管方压缩 + 内容哈希长缓存 / `index.html` no-cache 的决策与本地实测读数见交付说明 §2 |
 | README + 交付说明 + 资产接入指引 | `README.md` + `docs/交付说明.md` | ✅ 两份都已产出；README 里的命令**逐条实跑过**（`desktop:build` / `desktop:accept` 除外——本机沙箱跑不了，已在文档里如实标注） |
 | 最终验收回归（逐条对照 [§1.9](#19-验收标准)） | [`docs/阶段5.md`](./阶段5.md) §8 | 🟡 **A / C（Web 侧） / E 全部勾掉**；⬜ **B 打包产物与 D 前序积压必须在非沙箱终端完成**（`--target packaged` 至今从未跑过）。另：阶段 5 **修掉了两个"只要不修就永远无法验收"的门槛缺陷**（[§5.12.1](#5121-两条再怎么跑也永远不会变绿的验收断言本轮最重要的发现)） |
 
@@ -2242,10 +2259,10 @@ Tests  4 failed | 33 passed (37)
 | 相对路径三处解析 | 见上表，三种形态全部落在正确位置 |
 | 回归 | `npm run typecheck` exit 0 · **24 文件 / 467 例全绿** · `npm run build` 53 模块 → `index-jm7IpmLP.js` |
 
-**⬜ 本机做不到、因而明确标为"未验证"的两件事**（都不是代码问题）：
+**⬜ 本机做不到、因而明确标为"未验证"的一件事**（不是代码问题）：
 
-1. **没有任何浏览器执行过那个页面**——沙箱拒绝一切 Chromium 进程（[§5.3.1](#531-桌面端为什么在沙箱里起不来)）。所以"点开能玩"目前的全部依据是："上一轮修掉的启动缺陷（[§5.14](#514-现场反馈的第二条启动即抛脱绑定的方法调用点击没反应的真因)）+ 这一轮的 HTTP 层证据"，**还差一次真人点击**。
-2. **工作流一次都没真的跑过**——首次触发要等仓库推上去。CI 上有四个本机**没有以同样方式**验证过的前提，都已提前处理：① `tests/preload.mjs` 的 Windows 补丁有 `process.platform === 'win32'` 守卫（在 Linux 上是空操作）；② `package-lock.json` **必须一起提交**（`npm ci` 没有它直接失败——它至今是未跟踪文件，`git add -A` 会带上）；③ **锁文件里的 551 条 `resolved` 全指向 `registry.npmmirror.com`**（本机 npm 配的是镜像），所以工作流显式钉到官方源：`npm ci --registry=https://registry.npmjs.org --replace-registry-host=always`——**抽样核对过锁文件里的 integrity 与 npmjs 完全一致**（含每一个 `linux-x64` 平台包），因此只换主机名、校验照样通过，CI 也就不依赖第三方镜像是否在海外可达；④ Node 下限从 `22.12` 提到 **`22.15`**（`module.registerHooks` 的引入版本），工作流的 `node-version: 22` 取最新 22.x，恒满足。
+1. **没有任何浏览器执行过那个线上页面**——沙箱拒绝一切 Chromium 进程（[§5.3.1](#531-桌面端为什么在沙箱里起不来)）。所以"点开能玩"目前的全部依据是："上一轮修掉的启动缺陷（[§5.14](#514-现场反馈的第二条启动即抛脱绑定的方法调用点击没反应的真因)）+ 这一轮的 HTTP 层与字节级证据"，**还差一次真人点击**（桌面端的打包产物**也已经实机跑通过**，见 §0.1——但那是 `file://` 下的同一份产物，不能替代在浏览器里点这个网址）。
+2. ✅ **工作流已经真的跑通了（2026-09-15）**，但它的两次运行留下了两条经验：**run #1 红在 `npm ci`**（步骤 5–8 全被跳过、`deploy` 没跑），**run #2 全绿**。为了定位 run #1，本机把能查的都查了：锁文件 **551 条 `resolved` 全指向 `registry.npmmirror.com`**（本机 npm 配的是镜像），**逐条**与 npmjs 核对 integrity（548 条一致，3 条"不匹配"是我用别名查错了名字——`string-width-cjs` 这类），tarball 路径形状也全是标准的 `/name/-/name-version.tgz`，npm 10.9.9 认识 `--replace-registry-host`；锁文件里**只有两个包带 `install` 脚本**（`electron-winstaller` 的 Windows 7-Zip 复制、`fsevents` 的 darwin 专用）。**因为 CI 日志需要仓库权限才能下载（本机拿到 `403 Must have admin rights`），run #1 的根因没有被证实**——修法是两处一起改（`--ignore-scripts` + 回退到锁文件自带源），run #2 用这套配置全绿，**但这两处改动无法互相区分**。这条写下来是因为它是一次真实的"**没拿到日志就不要宣布根因**"的示范。另外四项本机**没有以同样方式**验证过的前提都已提前处理：① `tests/preload.mjs` 的 Windows 补丁有 `process.platform === 'win32'` 守卫（Linux 上是空操作，**run #2 已在 ubuntu-latest 上真跑过 467 例**）；② `package-lock.json` 必须随仓库提交；③ 见上（源与 integrity）；④ Node 下限从 `22.12` 提到 **`22.15`**（`module.registerHooks` 的引入版本），工作流的 `node-version: 22` 取最新 22.x，恒满足。
 
 **Pages 特有的三件事（与 [`docs/交付说明.md`](./交付说明.md) §2.1/§2.2 的差别）**：
 
@@ -2258,6 +2275,43 @@ Tests  4 failed | 33 passed (37)
 > ⚠️ **国内连通性要提前说清楚**：`*.github.io` 在中国大陆时通时不通（DNS 污染 / SNI 阻断），**"链接能打开"这件事本身不能承诺**。
 > 这与包无关——同一个 `dist/` 换任何一家静态托管都能用，**不需要改代码**。把这条写下来的理由与
 > ["验过状态码 ≠ 验过页面"](#513-收尾补丁现场反馈点击后没有任何反应静默失败已修) 是同一条：**能把不确定性说清楚，就不该让它藏在一句"已部署"里。**
+
+---
+
+<a id="516-非沙箱终端首次实跑打包产物与三条待重跑的命令"></a>
+#### 5.16 非沙箱终端首次实跑：打包产物出来了，三条命令还得重跑
+
+**这一节记录"第一次真的在普通终端里跑"的结果**——它把阶段 5 悬着的两组验收各推进了一半，也暴露了三个只会在真机出现的行为。
+
+**先说推进了什么（全部是新的、可复现的证据）：**
+
+| 项 | 结果 |
+|---|---|
+| 免安装产物 | ✅ **首次产出**。`release\win-unpacked\box-garden-shooter.exe` **246,086,144 B**（比 `node_modules` 里的原始 `electron.exe` 大 15,872 B → rcedit 的图标与版本信息确实写进去了，S2/S4 落地可验）；`resources\app.asar` 在位；`builder-debug.yml` 的 `files` 与 `electron-builder.yml` 逐条相符（含 `!**/*.map`） |
+| 外壳验收 | ✅ **`ok: true`——[§5.12.1](#5121-两条再怎么跑也永远不会变绿的验收断言本轮最重要的发现) 那两个"永远不可能变绿"的断言，第一次在真实运行上通过了**：整帧 spread **235.51**、场景带 **119.2**（阈值 12）、`requestCount: 4`（强制 reload 真的观察到了请求）、`failedRequiredLoads: 0`、`logRequiredErrors: 0`，两条豁免都点名 `player.glb`。**阶段 5 改的是测量对象，不是阈值——这一轮读数证明那次修改是对的** |
+| 渲染画面 | ✅ **阶段 2 起积压的"目视验收"第一次真的被看了**：竞技场 / 木箱 / 油桶 / 灯环 / 投影 / HUD 全在，且 HUD 读数与报告字段逐字相符。**D9 那个"遮罩盖住画布"的缺陷，到此为止是"断言 + 眼睛"双重确认** |
+| 真机性能 | 🟡 **被中断，但从 F3 截图里读到了数**：`FPS 59 · TPS 62 · step 0.80ms · draw 3.60ms · steps/frame 2 · dropped 1 · wave 1/8 · enemies 130 · seed 276646397`。`step 0.80 ms` 与 Node 侧下界 `0.841 ms` 相互印证——**"120 实体 60 FPS"与"tick ≤ 2 ms"看起来都达标，缺的是脚本自己写的 `perf` 对象** |
+
+**三个只会在真机上出现的行为（都不是游戏缺陷）：**
+
+| # | 现象 | 真相 / 处理 |
+|---|---|---|
+| 1 | `--target packaged` 报 `connect EACCES 127.0.0.1:9333`，而**应用本身启动正常**（`DevTools listening on ws://127.0.0.1:9333/...`，页面从 `app.asar` 内部加载成功） | `EACCES`（WSAEACCES 10013）**不是"端口被占用"**：`netsh int ipv4 show excludedportrange protocol=tcp` 实测只有 `50000–50059` 与 `54235`，不含 9333。最可能是**新生成的未签名 exe 第一次监听回环时被防火墙 / WFP 拦下**——几分钟后同一个 9333 被早已被系统放行的 `electron.exe` 正常用着（同一分钟的外壳验收是绿的）。**处理：重跑；仍失败就 `--port 9411`** |
+| 2 | `--scene perf` 与随后那次 `auto` 的 packaged 阶段**什么都没留下**（只有 `stdout/stderr/screenshot`，没有报告） | **报告与终判只在脚本跑完时落盘**，而 `perf` 还要额外 8 s 测量；两次都在中途被 Ctrl+C / 关窗。**这三条命令都要让它自己结束**——这正是"验收证据必须是脚本写的，不能是人挑的"那条纪律的另一面 |
+| 3 | perf 那次的 `stderr` 里有 `[shell] failed to load build output … ERR_ABORTED (-3) loading '…?scene=perf'` | **脚本强制 `Page.reload` 撞上了 shell 仍在飞的首次导航**（[§5.12.1](#5121-两条再怎么跑也永远不会变绿的验收断言本轮最重要的发现) 第 (3) 条加的那个 reload）。同一次运行的截图里 perf 场景已经正常在跑（`wave 1/8 · enemies 130`）——**这是噪声，不是加载失败**；外壳那次是它先加载完、reload 才到，所以没这条 |
+
+**仍然没有一个数字被"放宽"**：这一轮没有改任何断言、没有改任何数值、没有改任何玩法代码，只是把之前因为环境拿不到的证据补上了一部分。
+
+> ⚠️ **NSIS 安装包仍未产出。** 间接证据指向"NSIS 步骤启动过"：`%LOCALAPPDATA%\electron-builder\Cache\nsis-3.0.4.1` 的创建时间与 `builder-debug.yml` 的写入时间**是同一秒**，但 `release\` 下没有安装包。**重跑打包并保留终端输出即可定性**——不要凭猜测改 `electron-builder.yml`。
+
+**下一轮的三条命令（按优先级，都不需要改代码）：**
+
+```powershell
+cd E:\AiAgent\deepseekHarness2.0
+npm run desktop:accept -- --target packaged      # ① 期望 report-packaged.json 的 ok: true；EACCES 就加 --port 9411
+npm run desktop:accept -- --scene perf          # ② 等它跑完（内部 8 s 测量），要的是 report-shell-perf.json 里的 perf 对象
+npm run dev                                     # ③ 试听音效 + 打一局：两种敌人可辨 / 四处表现层画面 / 真人局时（10–15 分钟）
+```
 
 ---
 
@@ -2351,9 +2405,9 @@ Tests  4 failed | 33 passed (37)
 | **S2** ✅ | 版本号与可执行文件名 | **已决策：版本 `0.1.0` → `1.0.0`**（首个完整交付构建）；**`productName` 保持中文**（安装向导 / 快捷方式必须是中文），**新增 `win.executableName: box-garden-shooter`**（磁盘上的文件名要过终端、脚本与验收工具的编码关）。用户看到的每一个地方都没变 | **已落地**（阶段 5）：`package.json` + `electron-builder.yml`（`nsis.shortcutName: 箱庭射击` 不变） |
 | **S3** ✅ | 窗口行为里的**"退出确认"** | **已决策：不做，并且理由落纸** —— 判断"这一局是否进行中"要求主进程知道渲染进程的游戏状态，也就是**新增一条 IPC 通道**，直接违反"preload 暴露面保持最小"这条硬规则；而本版没有任何存档与进度，误关窗口的代价接近零。**这是"有理由的不做"，不是遗漏** | **已落地**（阶段 5）：`electron/main.cjs` 一行未改；`tests/shell.test.ts` 断言其中不出现 `ipcMain` / `ipcRenderer` |
 | **S4** ✅ | 打包图标 | **已决策：程序化生成**（`tools/make-icon.mjs`，零依赖：`node:zlib` + 自写 PNG 编码），产出 `build/icon.ico`（16/24/32/48/64/128/256；128 与 256 用 PNG 条目，更小的用经典 32bpp DIB）+ `build/icon.png`。造型是准星（环 + 四刻度 + 中心点）压在圆角深色底板上，理由是**它在 16×16 下还认得出** | **已落地**（阶段 5）：`npm run assets:icon`；`tests/shell.test.ts` 校验 ICO 头、七个尺寸与**必有 256×256**、以及每个载荷都落在文件内 |
-| **S5** ✅ | Web 部署形态 | **已决策：静态托管 + 托管方压缩 + 内容哈希长缓存 / `index.html` no-cache 且必须回源**；`base: './'` 已支持子目录部署。**不引 CDN、不引 service worker、不自己生成 `.gz` / `.br` 兄弟文件**（多数托管不会按 `Accept-Encoding` 选它们，只会把两份内容都传上去） | **已落地**（阶段 5）：[`docs/交付说明.md`](./交付说明.md) §2（含实测 gzip / brotli 读数与 nginx / Netlify 配置示例）。⬜ 实际上传由托管方完成 |
+| **S5** ✅ | Web 部署形态 | **已决策：静态托管 + 托管方压缩 + 内容哈希长缓存 / `index.html` no-cache 且必须回源**；`base: './'` 已支持子目录部署。**不引 CDN、不引 service worker、不自己生成 `.gz` / `.br` 兄弟文件**（多数托管不会按 `Accept-Encoding` 选它们，只会把两份内容都传上去） | **已落地并已上线**（阶段 5 + S7）：[`docs/交付说明.md`](./交付说明.md) §2（含实测 gzip / brotli 读数与 nginx / Netlify 配置示例）→ <https://violet-sept.github.io/box-garden-shooter/>。注意 **Pages 不支持自定义响应头**，§2.1 的缓存策略在那里落不了地（靠内容哈希 + Ctrl+F5） |
 | **S6** ✅ | 双端一致性怎么判 | **已决策：同种子 `--scene perf` 两端各跑一次比对读数** —— `ticks` / `kills` 应**逐点一致**（同种子 + 同固定步长），两端 `fps` 均需 ≥ 59；WASD / 左键 / 右键 / `R` / `E` 五项在两端各确认一遍。**不加 `--target web`**：浏览器版本不受控，它的失败不能当"Web 构建坏了"的判据 | **已定案**（阶段 5）：判据与记录表在 [`docs/交付说明.md`](./交付说明.md) §6。⬜ **读数待补**（本机跑不了任一端） |
-| **S7** ✅ | **Web 端"点开网址就能玩"怎么落地** | **已决策：GitHub Pages + 官方 Actions 工作流**（`.github/workflows/deploy-pages.yml`：`npm ci` → `npm test` → `npm run build` → 发布 `dist/`）。三条配套判断：① **不为托管方改 `base`**（相对引用正是同一个 `dist/` 能挂任意路径的原因）；② **自定义域在仓库设置里配，不加 `CNAME` 文件**（Actions 发布时官方明确"不创建也不读取"）；③ 连带定下一条硬规则——**运行时资产 URL 必须相对**（`PLAYER_MODEL_URL` 从 `/assets/...` 改成 `./assets/...`），否则桌面端（盘根）与 Pages 项目站（域名根）都会去错地方，而"资产缺失"是**被支持的降级路径**，失败会静默。**弃选**：(b) 手工把 `dist/` 拖到某个托管——可行但没有可复现的发布记录；(c) 加 `--target web` 验收工具——[S6](#63-待决策项) 已否决，浏览器版本不受控 | **已落地**（[§5.15](#515-web-上线一个-dist-挂到-github-pages)）：工作流 + 相对路径 + `tests/shell.test.ts` 三例钉子 + [`docs/交付说明.md`](./交付说明.md) §2.5 的上手步骤。⬜ **尚未真的推上去过**，也**没有浏览器执行过那个页面** |
+| **S7** ✅ | **Web 端"点开网址就能玩"怎么落地** | **已决策：GitHub Pages + 官方 Actions 工作流**（`.github/workflows/deploy-pages.yml`：`npm ci` → `npm test` → `npm run build` → 发布 `dist/`）。三条配套判断：① **不为托管方改 `base`**（相对引用正是同一个 `dist/` 能挂任意路径的原因）；② **自定义域在仓库设置里配，不加 `CNAME` 文件**（Actions 发布时官方明确"不创建也不读取"）；③ 连带定下一条硬规则——**运行时资产 URL 必须相对**（`PLAYER_MODEL_URL` 从 `/assets/...` 改成 `./assets/...`），否则桌面端（盘根）与 Pages 项目站（域名根）都会去错地方，而"资产缺失"是**被支持的降级路径**，失败会静默。**弃选**：(b) 手工把 `dist/` 拖到某个托管——可行但没有可复现的发布记录；(c) 加 `--target web` 验收工具——[S6](#63-待决策项) 已否决，浏览器版本不受控 | **已落地并且已上线**（[§5.15](#515-web-上线一个-dist-挂到-github-pages)）：工作流（run #2 全绿）+ 相对路径 + `tests/shell.test.ts` 三例钉子 + [`docs/交付说明.md`](./交付说明.md) §2.5 的上手步骤 → **<https://violet-sept.github.io/box-garden-shooter/>**，线上产物与本地 `dist/` 逐字节一致。⬜ 仍差**一次真人点击** |
 
 
 > **D6 / D7 已在本轮定案并落到代码与文档**，下面是决策过程留档（后续若要重新调整数值，先看这里当时权衡了什么）。
