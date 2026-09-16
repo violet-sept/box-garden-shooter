@@ -15,6 +15,10 @@
 > [![Deploy web build](https://github.com/violet-sept/box-garden-shooter/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/violet-sept/box-garden-shooter/actions/workflows/deploy-pages.yml) —— 推 `main` 即自动构建 + 全量测试 + 部署；**阶段 5 那次发布时**，线上 `index.html` 与两个分包已核对为与**当时**的本地 `dist/` 字节一致（见 [`docs/交付说明.md`](docs/交付说明.md) §2.5）。⚠️ **线上至今仍是那一份旧构建**（"鼠标不能转视角"的 `89c115e`），阶段 6 起的修复都还没发布——想玩到当前版本要推一次 `main`，或者先用 `npm run preview`。
 
 ---
+<img width="1268" height="701" alt="屏幕截图 2026-09-16 201702" src="https://github.com/user-attachments/assets/893897ce-1826-4c55-898b-32d81d019c3b" />
+
+<img width="1251" height="678" alt="屏幕截图 2026-09-16 201724" src="https://github.com/user-attachments/assets/d2456008-18c3-475f-abc2-4c117fd4f3d0" />
+
 
 ## 1. 操作
 
