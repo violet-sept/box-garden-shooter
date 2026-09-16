@@ -10,7 +10,8 @@
  *   Mouse Left     - fire
  *   Mouse Right    - aim down sights (ADS)
  *   R              - reload
- *   E              - throw item
+ *   Q              - throw item
+ *   E              - use a supply crate (ammo box / medkit)
  *   V              - toggle first / third person
  *   Shift          - sprint      Space - jump      Esc - release pointer
  */
@@ -39,8 +40,23 @@ export interface InputIntent {
   readonly aim: boolean;
   /** Edge-triggered: true on the tick R went down. */
   readonly reload: boolean;
-  /** Edge-triggered: true on the tick E went down. */
+  /**
+   * Edge-triggered: true on the tick Q went down.
+   *
+   * It was `E` until phase 11. The supply crates need a key whose whole meaning is "use the
+   * thing I am standing next to", and a key that means "throw" or "use" depending on where
+   * the player happens to be standing is an ambiguity the player has to model. `Q` is the
+   * next key under the same finger.
+   */
   readonly throwItem: boolean;
+  /**
+   * Edge-triggered: true on the tick E went down.
+   *
+   * An edge like `reload` rather than a level like `fire`: taking a crate is a discrete act,
+   * and a level flag would re-take the next crate the instant one appeared under a held key —
+   * which, with a crate every twenty seconds, is a button that plays itself.
+   */
+  readonly interact: boolean;
   /**
    * Edge-triggered: true on the tick `V` went down (first/third person).
    *
@@ -69,7 +85,15 @@ export const BINDINGS = {
   back: ['KeyS'],
   right: ['KeyD'],
   reload: ['KeyR'],
-  throwItem: ['KeyE'],
+  throwItem: ['KeyQ'],
+  /**
+   * Supply crates (phase 11).
+   *
+   * In this table rather than a `keydown` listener of its own, for the reason stated above
+   * `toggleView`: one owner for `preventDefault`, for the locked/unlocked question and for the
+   * "repeat does not count as a new press" rule that every edge action shares.
+   */
+  interact: ['KeyE'],
   /**
    * First / third person toggle (phase 8).
    *
@@ -220,6 +244,7 @@ export class InputState {
       // when a frame runs several steps.
       reload: this.pressedEdges.has('reload'),
       throwItem: this.pressedEdges.has('throwItem'),
+      interact: this.pressedEdges.has('interact'),
       toggleView: this.pressedEdges.has('toggleView'),
       // Read from the accumulator, not from a per-tick copy: the whole tick's motion
       // belongs to the tick that is about to be simulated, and `endTick` consumes it.

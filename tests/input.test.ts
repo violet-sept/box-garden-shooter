@@ -468,4 +468,35 @@ describe('view toggle key', () => {
     windowStub.fire('keydown', { code: 'KeyV', repeat: false });
     expect(input.sample().toggleView).toBe(true);
   });
+
+  it('maps E onto the crate interaction and Q onto the throw', () => {
+    // The phase-11 rebind, pinned as input rather than as a comment: `E` is the brief's
+    // interaction key, and the throw that used to live there moved to `Q`. A build where one of
+    // the two still answered to the other letter would be a player pressing E and lobbing a
+    // grenade at their own feet.
+    const input = new InputState(makeCanvas(() => undefined));
+
+    windowStub.fire('keydown', { code: 'KeyE', repeat: false });
+    let intent = input.sample();
+    expect(intent.interact).toBe(true);
+    expect(intent.throwItem).toBe(false);
+    expect(input.wasPressed('interact')).toBe(true);
+    input.endTick();
+    expect(input.sample().interact).toBe(false);
+
+    windowStub.fire('keydown', { code: 'KeyQ', repeat: false });
+    intent = input.sample();
+    expect(intent.throwItem).toBe(true);
+    expect(intent.interact).toBe(false);
+    input.endTick();
+    expect(input.sample().throwItem).toBe(false);
+  });
+
+  it('does not treat a held E as a repeat, so a crate cannot be taken twice', () => {
+    const input = new InputState(makeCanvas(() => undefined));
+    windowStub.fire('keydown', { code: 'KeyE', repeat: false });
+    input.endTick();
+    windowStub.fire('keydown', { code: 'KeyE', repeat: true });
+    expect(input.sample().interact).toBe(false);
+  });
 });

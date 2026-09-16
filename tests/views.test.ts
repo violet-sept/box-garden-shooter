@@ -30,11 +30,13 @@ import { createHud, overlayVisibility, type HudElements } from '#/render/hud/hud
 import { createWorld } from '#/game/World';
 import { createPlayerState } from '#/game/player/player';
 import { createWeaponState } from '#/game/player/weapon';
-import { ENEMY_ARCHETYPES, HEALTH_BAR, PLAYER, VIEW, WARDEN, WEAPON_MODEL } from '#/core/config';
+import { ENEMY_ARCHETYPES, HEALTH_BAR, HELICOPTER, PICKUPS, PLAYER, VIEW, WARDEN, WEAPON_MODEL } from '#/core/config';
 import { DEG2RAD } from '#/core/math/vec3';
 import { EventBus } from '#/core/events';
 import type { EnemyState } from '#/game/enemies/EnemyState';
 import type { PlayerState } from '#/game/player/player';
+import { createPickupView } from '#/render/scene/pickupView';
+import type { Pickup } from '#/game/pickups/pickupSystem';
 
 /**
  * A handful of real enemies of both archetypes, spawned straight into a world.
@@ -587,6 +589,7 @@ function fakeHudElements(): HudElements {
     chargeCount: fakeElement(),
     spreadHint: fakeElement(),
     countdown: fakeElement(),
+    interact: fakeElement(),
     stats: fakeElement(),
     hint: fakeElement(),
     damageFlash: fakeElement(),
@@ -616,6 +619,9 @@ describe('HUD layer state', () => {
       enemiesAlive: 0,
       enemiesRemaining: 30,
       countdownSeconds: 0,
+      countdownWave: 1 as const,
+      interactTarget: null,
+      pickupsAlive: 0,
       dead: false,
       batch: 1,
       totalBatches: 5,
@@ -667,6 +673,52 @@ describe('HUD layer state', () => {
     // And it goes away when the drops start — the element must not linger at "1".
     hud.update(hudView({ countdownSeconds: 0 }));
     expect(elements.countdown.hidden).toBe(true);
+  });
+
+  it('shows each countdown in the same element, with that wave’s words', () => {
+    const elements = fakeHudElements();
+    const hud = createHud(elements);
+
+    hud.update(hudView({ countdownSeconds: 10, countdownWave: 1 }));
+    expect(elements.countdown.hidden).toBe(false);
+    expect(elements.countdown.textContent).toBe('第一批敌人还有 10 秒到达战场');
+
+    // The Warden is down and the second wave's clock is running: one element, and the words
+    // follow the wave the director reports rather than a second piece of UI.
+    hud.update(hudView({ countdownSeconds: 20, countdownWave: 2 }));
+    expect(elements.countdown.hidden).toBe(false);
+    expect(elements.countdown.textContent).toBe('第二批敌人还有 20 秒到达战场');
+
+    // Wave 0 is "there is no clock": drops two through five are announced by their ground
+    // rings, so a number left on screen would stop meaning "brace yourself".
+    hud.update(hudView({ countdownSeconds: 12, countdownWave: 0 }));
+    expect(elements.countdown.hidden).toBe(true);
+  });
+
+  it('offers the crate in reach through E, and takes the offer away when there is none', () => {
+    const elements = fakeHudElements();
+    const hud = createHud(elements);
+
+    // Nothing in reach. The element's *initial* state is the markup's (`#interact hidden` in
+    // `index.html`), because the HUD only writes on a change — the same rule the countdown has.
+    hud.update(hudView({ interactTarget: null }));
+    expect(elements.interact.hidden).toBe(false);
+    expect(elements.interact.textContent).toBe('');
+
+    // The amounts come from `PICKUPS`, so a retuned crate cannot promise the old number.
+    hud.update(hudView({ interactTarget: 'ammo' }));
+    expect(elements.interact.hidden).toBe(false);
+    expect(elements.interact.textContent).toContain('按 E');
+    expect(elements.interact.textContent).toContain('弹药箱');
+    expect(elements.interact.textContent).toContain(String(PICKUPS.ammoRounds));
+
+    hud.update(hudView({ interactTarget: 'medkit' }));
+    expect(elements.interact.textContent).toContain('医疗箱');
+    expect(elements.interact.textContent).toContain(String(PICKUPS.healAmount));
+
+    hud.update(hudView({ interactTarget: null }));
+    expect(elements.interact.hidden).toBe(true);
+    expect(elements.interact.textContent).toBe('');
   });
 
   it('ships each overlay and the HUD as exact opposites, in both directions', () => {
@@ -1088,5 +1140,172 @@ describe('character rig', () => {
       rig.sync(player, 1 / 60, 'firstPerson', view);
       expect(rig.state).toBe('run');
     });
+  });
+});
+
+describe('gunship body', () => {
+  /** A live gunship, spawned through the store the way the director does. */
+  function gunship(): EnemyState {
+    const world = createWorld({ events: new EventBus(), seed: 11 });
+    return world.enemies.spawn('helicopter', { x: 0, y: 0, z: -16 }, { state: 'IDLE' });
+  }
+
+  /** Every material colour under a group. */
+  function colours(root: Object3D): number[] {
+    const found: number[] = [];
+    root.traverse((object) => {
+      const mesh = object as Mesh;
+      const material = mesh.material;
+      if (!mesh.isMesh || !material) return;
+      const list = Array.isArray(material) ? material : [material];
+      for (const entry of list) {
+        if (entry instanceof MeshStandardMaterial) found.push(entry.color.getHex());
+      }
+    });
+    return found;
+  }
+
+  it('is built in the brief’s two colours: black airframe, orange rotors', () => {
+    const view = createEnemyView();
+    view.update([gunship()], 0, 1 / 60);
+    const body = view.root.children.find((child) => child.name === 'enemy:helicopter');
+    expect(body).toBeDefined();
+    const palette = colours(body!);
+    expect(palette).toContain(HELICOPTER.colours.body);
+    expect(palette).toContain(HELICOPTER.colours.rotor);
+    // The rotor's orange is the emissive channel rather than only a diffuse colour, for the
+    // same reason the weapon's muzzle has one: under this lighting a plain orange reads brown.
+    let rotorMaterial: MeshStandardMaterial | null = null;
+    body!.traverse((object) => {
+      const mesh = object as Mesh;
+      if (!mesh.isMesh) return;
+      const material = mesh.material;
+      if (material instanceof MeshStandardMaterial && material.color.getHex() === HELICOPTER.colours.rotor) {
+        rotorMaterial = material;
+      }
+    });
+    expect(rotorMaterial).not.toBeNull();
+    expect((rotorMaterial as unknown as MeshStandardMaterial).emissive.getHex()).toBe(HELICOPTER.colours.rotorEmissive);
+  });
+
+  it('turns both rotors, at the configured rate, every frame', () => {
+    const view = createEnemyView();
+    const enemy = gunship();
+    view.update([enemy], 0, 1 / 60);
+    const body = view.root.children.find((child) => child.name === 'enemy:helicopter');
+    const main = body!.children.find((child) => child.name === 'rotor:main');
+    const tail = body!.children.find((child) => child.name === 'rotor:tail');
+    expect(main).toBeDefined();
+    expect(tail).toBeDefined();
+
+    const dt = 1 / 60;
+    const beforeMain = main!.rotation.y;
+    const beforeTail = tail!.rotation.x;
+    view.update([enemy], 0, dt);
+    // Exactly the configured rate: "the rotor visibly turns" is one number, and a frame-rate
+    // independent one (`dt` is render time, so a hitstop does not stall the blades).
+    expect(main!.rotation.y - beforeMain).toBeCloseTo(HELICOPTER.rotorSpinRadPerSec * dt, 9);
+    expect(tail!.rotation.x - beforeTail).toBeCloseTo(HELICOPTER.rotorSpinRadPerSec * dt, 9);
+
+    // And it keeps going: four blades crossing the hub is a *rotation*, not one nudge.
+    for (let i = 0; i < 60; i += 1) view.update([enemy], 0, dt);
+    expect(main!.rotation.y - beforeMain).toBeGreaterThan(1);
+  });
+
+  it('shows the gunship’s own health-bar size, not the Warden’s', () => {
+    const view = createEnemyView();
+    view.update([gunship()], 0, 1 / 60);
+    const body = view.root.children.find((child) => child.name === 'enemy:helicopter');
+    const bar = body?.children.find((child) => child.name === 'enemy:helicopter:bar');
+    expect(bar).toBeDefined();
+    // The bar clears the silhouette it belongs to: the gap plus the body's own height.
+    expect(bar!.position.y).toBeCloseTo(ENEMY_ARCHETYPES.helicopter.height + HEALTH_BAR.topGap.helicopter, 9);
+  });
+});
+
+describe('pickup view', () => {
+  /** A crate of `kind` at a fixed spot, the shape the simulation publishes. */
+  function crate(id: number, kind: Pickup['kind'], x = 0, z = 0, active = true): Pickup {
+    return { id, kind, active, position: { x, y: PICKUPS.size * 0.5, z } };
+  }
+
+  /** Every material colour under a body. */
+  function colours(root: Object3D): number[] {
+    const found: number[] = [];
+    root.traverse((object) => {
+      const mesh = object as Mesh;
+      const material = mesh.material;
+      if (!mesh.isMesh || !material) return;
+      const list = Array.isArray(material) ? material : [material];
+      for (const entry of list) {
+        if (entry instanceof MeshStandardMaterial) found.push(entry.color.getHex());
+      }
+    });
+    return found;
+  }
+
+  it('draws the ammo box gold and the medkit white with a red cross', () => {
+    const view = createPickupView();
+    view.update([crate(1, 'ammo'), crate(2, 'medkit', 6, 0)], 0);
+    const ammo = view.root.children.find((child) => child.name === 'pickup:ammo');
+    const medkit = view.root.children.find((child) => child.name === 'pickup:medkit');
+    expect(ammo).toBeDefined();
+    expect(medkit).toBeDefined();
+
+    const ammoPalette = colours(ammo!);
+    expect(ammoPalette).toContain(PICKUPS.colours.ammoBody);
+    expect(ammoPalette).toContain(PICKUPS.colours.ammoLatch);
+
+    const medkitPalette = colours(medkit!);
+    expect(medkitPalette).toContain(PICKUPS.colours.medkitBody);
+    // The cross is the part that makes it a medkit rather than a white box at range.
+    expect(medkitPalette).toContain(PICKUPS.colours.medkitCross);
+  });
+
+  it('hides a crate the instant it is used, without rebuilding anything', () => {
+    const view = createPickupView();
+    const ammo = crate(1, 'ammo');
+    const medkit = crate(2, 'medkit', 6, 0);
+    view.update([ammo, medkit], 0);
+    const built = meshCount(view.root);
+    expect(view.root.children.filter((child) => child.visible)).toHaveLength(2);
+
+    // The player takes the ammo box: the simulation simply stops reporting it. A crate has no
+    // death animation, so it is gone — not collapsed, not left half-drawn.
+    ammo.active = false;
+    view.update([ammo, medkit], 0);
+    const visible = view.root.children.filter((child) => child.visible);
+    expect(visible).toHaveLength(1);
+    expect(visible[0]?.name).toBe('pickup:medkit');
+
+    // Churning crates for a while must not grow the pool.
+    for (let i = 0; i < 40; i += 1) {
+      ammo.active = i % 2 === 0;
+      view.update([ammo, medkit], i * 0.1);
+    }
+    expect(meshCount(view.root)).toBe(built);
+  });
+
+  it('spins and bobs, so a crate does not read as level geometry', () => {
+    const view = createPickupView();
+    const ammo = crate(1, 'ammo');
+    view.update([ammo], 0);
+    const body = view.root.children[0]!;
+    const restingY = body.position.y;
+    expect(body.rotation.y).toBeCloseTo(0, 9);
+
+    view.update([ammo], 1);
+    expect(body.rotation.y).toBeGreaterThan(0);
+    // It sits on the floor and bobs around its own centre, never below it.
+    expect(Math.abs(body.position.y - restingY)).toBeLessThanOrEqual(0.1);
+  });
+
+  it('clears itself on a restart and disposes what it built', () => {
+    const view = createPickupView();
+    view.update([crate(1, 'ammo'), crate(2, 'medkit', 6, 0)], 0);
+    view.clear();
+    expect(view.root.children.filter((child) => child.visible)).toHaveLength(0);
+    expect(() => view.dispose()).not.toThrow();
+    expect(view.root.children).toHaveLength(0);
   });
 });

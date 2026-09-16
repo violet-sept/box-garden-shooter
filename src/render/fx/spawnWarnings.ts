@@ -144,8 +144,12 @@ export function createSpawnWarnings(): SpawnWarnings {
     attach(events) {
       events.on('spawn:pending', (payload) => {
         const slot = claim();
-        const radius = payload.archetype === 'large' ? DIRECTOR.spawnWarningRadiusBoss : DIRECTOR.spawnWarningRadius;
-        slot.boss = payload.archetype === 'large';
+        // "Anything that is not a Stalker is a boss" rather than a list of the bosses: the
+        // warm ring, the pulse and the louder blip are the *arrival of something important*
+        // channel, and a third archetype added later must not silently arrive as a small fry.
+        const boss = payload.archetype !== 'small';
+        const radius = boss ? DIRECTOR.spawnWarningRadiusBoss : DIRECTOR.spawnWarningRadius;
+        slot.boss = boss;
         slot.total = Math.max(payload.warning, 1e-3);
         slot.life = slot.total;
         slot.group.position.set(payload.position.x, 0, payload.position.z);

@@ -55,6 +55,8 @@ import { createTelegraphView, type AimLine, type ShotMarker } from '@/render/fx/
 import { createSpawnWarnings } from '@/render/fx/spawnWarnings';
 import { createThrowableView } from '@/render/fx/throwableView';
 import { createEnemyView } from '@/render/models/enemyView';
+import { createPickupView } from '@/render/scene/pickupView';
+import { isHeavy } from '@/game/enemies/EnemyState';
 import {
   loadCharacter,
   PLAYER_MODEL_HEIGHT,
@@ -81,6 +83,7 @@ const IDLE_INTENT = {
   aim: false,
   reload: false,
   throwItem: false,
+  interact: false,
   toggleView: false,
   lookDeltaX: 0,
   lookDeltaY: 0,
@@ -186,6 +189,7 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
     chargeCount: requireElement('charge-count'),
     spreadHint: requireElement('spread-hint'),
     countdown: requireElement('countdown'),
+    interact: requireElement('interact'),
     stats: statsElement,
     hint: bootCta,
     damageFlash: requireElement('damage-flash'),
@@ -214,6 +218,16 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
 
   const enemyView = createEnemyView();
   scene.add(enemyView.root);
+
+  /**
+   * The supply crates.
+   *
+   * Their own layer rather than part of `levelView`: the level is authored and built once,
+   * while crates appear and are taken during the run. They are pooled, so a run's worth of
+   * deliveries costs the same handful of meshes.
+   */
+  const pickupView = createPickupView();
+  scene.add(pickupView.root);
 
   const telegraph = createTelegraphView();
   scene.add(telegraph.root);
@@ -422,7 +436,10 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
     let lineCount = 0;
     let shotCount = 0;
     for (const enemy of world.enemies.targets) {
-      if (!enemy.alive || enemy.kind !== 'large') continue;
+      // Both heavies: the gunship fires the same line, so it is drawn by the same code and
+      // with the same brightness ramp. A second collector for it would be a second place for
+      // "the warning line tracks the shot" to be true.
+      if (!enemy.alive || !isHeavy(enemy.kind)) continue;
 
       if (enemy.aim.active && enemy.aim.length > 0) {
         let line = aimLines[lineCount];
@@ -522,6 +539,10 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
       // The view interpolates from the world's own tick-to-tick positions, so a
       // 60 Hz simulation reads smoothly on a 144 Hz display.
       enemyView.update(world.enemies.targets, alpha, rtt);
+      // Crates spin and bob on **render** time (the frame's own clock, not the simulation's):
+      // a hitstop must not stop the one cue that says "this box is interactive", and the same
+      // rule already governs the rotors, the effects and the camera.
+      pickupView.update(world.pickups.pickups, nowMs / 1000);
 
       collectWardenAttack(rtt);
       telegraph.showAimLines(aimLines);
@@ -557,10 +578,14 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
         bannerRemaining: 0,
         enemiesAlive: world.enemies.liveCount(),
         enemiesRemaining: director.remaining,
-        // The opening countdown only. From the first drop onwards the field is announcing
-        // itself with ground rings, and a permanent clock at the top of the screen would
-        // stop meaning "brace yourself".
-        countdownSeconds: director.phase === 'OPENING' ? director.timer : 0,
+        // Whichever countdown is running, and which wave it belongs to. The director derives
+        // both from one clock, so the number on screen and the moment the drop lands cannot
+        // drift apart; drops two through five report wave 0 and hide the element, because
+        // their ground rings are what announce them.
+        countdownSeconds: director.countdownSeconds,
+        countdownWave: director.countdownWave,
+        interactTarget: world.interactTarget()?.kind ?? null,
+        pickupsAlive: world.pickups.liveCount(),
         dead: world.player.dead,
         batch: director.batch,
         totalBatches: director.totalBatches,
@@ -742,6 +767,7 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
     telegraph.clear();
     spawnWarnings.clear();
     throwable.clear();
+    pickupView.clear();
     effects.setMuzzle(muzzleScratch, aimScratch, false);
     enemyView.update(world.enemies.targets, 0, 0);
     // The body is snapped rather than turned to the spawn facing: on a restart the character
@@ -857,12 +883,36 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
     hud.banner('场上已清空 · 典狱长即将登场', 'good');
   });
 
-  events.on('boss:spawned', () => {
-    hud.banner('典狱长登场', 'warn');
+  /**
+   * The second wave (phase 11).
+   *
+   * The countdown element is already on screen saying how long, so the banner's job is the
+   * half the number cannot say: *what* is coming. That is also why the countdown's text stays
+   * "第二批敌人" — the player learns the name here, once, and the clock stays short.
+   */
+  events.on('secondWave:incoming', () => {
+    hud.banner('第二批敌人 · 武装直升机', 'warn');
   });
 
-  events.on('boss:died', () => {
-    hud.banner('典狱长已被击毙', 'good');
+  events.on('boss:spawned', (payload) => {
+    hud.banner(payload.archetype === 'helicopter' ? '武装直升机已抵达战场' : '典狱长登场', 'warn');
+  });
+
+  events.on('boss:died', (payload) => {
+    hud.banner(payload.archetype === 'helicopter' ? '第二批敌人已被击落' : '典狱长已被击毙', 'good');
+  });
+
+  /**
+   * Supply pickups.
+   *
+   * The banner reports the amount the crate **actually** granted, which is why
+   * `pickup:collected` carries one: a medkit used at full health says "+0" rather than
+   * promising 50 and quietly delivering nothing.
+   */
+  events.on('pickup:collected', (payload) => {
+    const label = payload.kind === 'ammo' ? '弹药箱' : '医疗箱';
+    const unit = payload.kind === 'ammo' ? '备弹' : '生命';
+    hud.banner(`${label} · ${unit} +${payload.amount}`, payload.amount > 0 ? 'good' : 'neutral');
   });
 
   /**
@@ -890,7 +940,7 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
   };
 
   events.on('run:victory', (payload) => {
-    endRun('胜利', `全部清空 · 用时 ${elapsedLabel(payload.elapsed)} · 种子已记录在 F3`);
+    endRun('胜利', `两批敌人全部清空 · 用时 ${elapsedLabel(payload.elapsed)} · 种子已记录在 F3`);
   });
 
   events.on('run:defeat', (payload) => {
@@ -962,6 +1012,7 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
       telegraph.dispose();
       spawnWarnings.dispose();
       throwable.dispose();
+      pickupView.dispose();
       levelView.dispose();
       rig.dispose();
       window.removeEventListener('resize', handleResize);

@@ -372,3 +372,21 @@ export function refill(state: WeaponState): void {
   state.magazine = clamp(WEAPON.magazineSize, 0, WEAPON.magazineSize);
   state.reserve = clamp(WEAPON.maxReserveAmmo, 0, WEAPON.maxReserveAmmo);
 }
+
+/**
+ * Adds rounds to the reserve, and returns how many actually fit (phase 11).
+ *
+ * The return value is the honest number rather than the requested one. An ammo crate used
+ * with a full reserve grants nothing, and the HUD says so instead of promising 90 and
+ * delivering none — the same rule the medkit's heal follows, and the reason
+ * `pickup:collected` carries an `amount` at all.
+ *
+ * The **magazine is deliberately not topped up**: a crate is a supply, not a reload. Filling
+ * the magazine would make the crate the thing that performs a reload, which would quietly
+ * remove the reload (and its vulnerable 2.1 s window) from the fights the crates exist for.
+ */
+export function grantReserveAmmo(state: WeaponState, rounds: number): number {
+  const before = state.reserve;
+  state.reserve = clamp(state.reserve + Math.max(0, rounds), 0, WEAPON.maxReserveAmmo);
+  return state.reserve - before;
+}

@@ -15,6 +15,7 @@ import {
   createWeaponState,
   effectiveSpread,
   fireInterval,
+  grantReserveAmmo,
   reloadDurationFor,
   tickRecoil,
   tickWeapon,
@@ -261,6 +262,33 @@ describe('magazine and reload', () => {
     state.reserve = 0;
     const result = tickWeapon(state, { fire: false, aim: false, reloadPressed: true }, 1 / 60, 0);
     expect(result.reloadStarted).toBe(false);
+  });
+
+  it('adds a crate’s rounds to the reserve, and reports what actually fit', () => {
+    // The supply crate's half of the ammo economy (phase 11). The return value is the honest
+    // number rather than the requested one, because the HUD prints it: a crate used at the cap
+    // has to say "+0" rather than promise 90 and deliver nothing.
+    const state = createWeaponState(1);
+    state.reserve = 10;
+    expect(grantReserveAmmo(state, 90)).toBe(90);
+    expect(state.reserve).toBe(100);
+    // The magazine is not topped up: a crate is a supply, not a reload.
+    expect(state.magazine).toBe(WEAPON.magazineSize);
+
+    // At the cap, nothing fits and nothing overflows.
+    state.reserve = WEAPON.maxReserveAmmo;
+    expect(grantReserveAmmo(state, 90)).toBe(0);
+    expect(state.reserve).toBe(WEAPON.maxReserveAmmo);
+
+    // Partially full: the grant is clamped and the clamp is what is reported.
+    state.reserve = WEAPON.maxReserveAmmo - 20;
+    expect(grantReserveAmmo(state, 90)).toBe(20);
+    expect(state.reserve).toBe(WEAPON.maxReserveAmmo);
+
+    // A nonsensical request cannot take ammunition away.
+    state.reserve = 50;
+    expect(grantReserveAmmo(state, -10)).toBe(0);
+    expect(state.reserve).toBe(50);
   });
 });
 

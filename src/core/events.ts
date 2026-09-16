@@ -14,7 +14,7 @@
  */
 
 import type { Vector3 } from './math/vec3';
-import type { EnemyArchetypeId } from './config';
+import type { EnemyArchetypeId, PickupKind } from './config';
 
 /** Which part of a hitbox was struck, which selects the damage multiplier. */
 export type HitZone = 'head' | 'body';
@@ -234,18 +234,67 @@ export interface GameEvents {
   /** The enemy announced by `spawn:pending` is now in the world. */
   'enemy:spawned': { tick: number; enemyId: number; archetype: EnemyArchetypeId; position: Vector3 };
   /**
-   * The Warden's body exists.
+   * A boss-tier body exists: the Warden, or the gunship that follows it.
    *
-   * No `reason` any more: there is exactly one way it is released ("the field is clear"),
-   * so a field that could only ever hold one value was a field waiting to be read as a
-   * rule. The order itself is announced by `spawn:pending` with `archetype: 'large'`,
-   * which is what the ground ring and the boss warning sound are drawn from.
+   * It was the Warden's event alone until phase 11, which is why the name still says
+   * "boss"; the `archetype` field is what the presentation layer branches on, because "a
+   * heavy enemy arrived" is one fact with two carriers. There is still exactly one Warden
+   * and exactly one gunship per run, and neither can arrive while the other is alive.
+   *
+   * No `reason` any more: the Warden is released when the field is clear and at no other
+   * moment, so a field that could only ever hold one value was a field waiting to be read
+   * as a rule. The order itself is announced by `spawn:pending`, which is what the ground
+   * ring and the warning sound are drawn from.
    */
   'boss:spawned': {
     tick: number;
     enemyId: number;
+    archetype: EnemyArchetypeId;
   };
-  'boss:died': { tick: number; enemyId: number };
+  'boss:died': { tick: number; enemyId: number; archetype: EnemyArchetypeId };
+  /**
+   * The Warden is dead and the second wave is on its way (phase 11).
+   *
+   * Fired once, on the tick the countdown starts, so the presentation layer can name what
+   * is coming while the top-centre countdown shows how long. The countdown's own number is
+   * *not* on this payload: it is a live readout and lives on the director's status, which
+   * the HUD already reads once a frame.
+   */
+  'secondWave:incoming': {
+    tick: number;
+    /** Seconds until the gunship is ordered, i.e. the countdown the HUD shows. */
+    seconds: number;
+    archetype: EnemyArchetypeId;
+  };
+  /**
+   * A supply crate appeared (phase 11).
+   *
+   * Silent by design (no sound recipe): a crate every twenty seconds would be a blip the
+   * player learns to ignore, and unlike a spawn it is not a threat. The pickup *is*
+   * sounded, which is the half that carries information.
+   */
+  'pickup:spawned': {
+    tick: number;
+    id: number;
+    kind: PickupKind;
+    position: Vector3;
+  };
+  /**
+   * The player used a crate with `E`.
+   *
+   * `amount` is what the crate actually granted, which is **not** always the configured
+   * value: a medkit used at full health heals nothing and an ammo box at the reserve cap
+   * adds nothing. The crate is consumed either way — the player spent it — so the event
+   * reports the real number and the HUD can say "+0" honestly rather than promising 50 and
+   * delivering none.
+   */
+  'pickup:collected': {
+    tick: number;
+    id: number;
+    kind: PickupKind;
+    position: Vector3;
+    amount: number;
+  };
   'item:thrown': { tick: number; position: Vector3; direction: Vector3; chargesLeft: number };
   'item:exploded': { tick: number; position: Vector3; radius: number; hits: number };
   /**

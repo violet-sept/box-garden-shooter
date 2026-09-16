@@ -73,18 +73,33 @@ describe('boot veil', () => {
     expect(main).toContain('浏览器拒绝了鼠标锁定');
   });
 
-  it('ships the opening countdown as hidden markup the HUD can fill', () => {
+  it('ships both countdowns and the E prompt as hidden markup the HUD can fill', () => {
     const html = read('index.html');
     // Static, and hidden: the text is a live number, so an empty element that shipped
     // visible would be a bordered panel with nothing in it on the title screen. The HUD
     // writes the text only on a change (see `createHud`), which is also why the initial
     // state has to come from the markup.
     expect(html).toMatch(/id="countdown"[^>]*hidden/);
-    expect(read('src/main.ts')).toContain("countdown: requireElement('countdown')");
-    // The phrase the player reads is built by the HUD, not written into the markup — it
-    // carries a number that changes ten times in ten seconds, so the element ships empty.
+    // The same for the pickup prompt: it must never ship visible, because "there is a crate
+    // in reach" is a fact only the simulation has.
+    expect(html).toMatch(/id="interact"[^>]*hidden/);
+    const main = read('src/main.ts');
+    expect(main).toContain("countdown: requireElement('countdown')");
+    expect(main).toContain("interact: requireElement('interact')");
+    // The phrases the player reads are built by the HUD, not written into the markup — the
+    // countdown carries a number that changes once a second and the prompt carries a kind and
+    // an amount, so both elements ship empty.
     expect(html).toMatch(/<div id="countdown"[^>]*><\/div>/);
-    expect(read('src/render/hud/hud.ts')).toContain('第一批敌人还有');
+    expect(html).toMatch(/<div id="interact"[^>]*><\/div>/);
+    const hud = read('src/render/hud/hud.ts');
+    expect(hud).toContain('批敌人还有');
+    expect(hud).toContain('秒到达战场');
+    expect(hud).toContain('按 E 拾取');
+    // And the boot screen names the two keys as they are bound: throwing moved to Q when E
+    // became the interaction key, so a screen that still said "E 投掷" would teach a lie.
+    expect(html).toContain('Q 投掷');
+    expect(html).toContain('E 拾取');
+    expect(html).toContain('道具 [Q]');
   });
 });
 

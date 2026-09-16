@@ -535,10 +535,61 @@ export const ENEMY_LARGE: EnemyStats = {
   dropChance: 1.0,
 };
 
+/**
+ * The second wave: an armed gunship (phase 11).
+ *
+ * ## Why this is `ENEMY_LARGE` spread rather than a stat block of its own
+ *
+ * The brief for it is "attack method identical to the Warden, health and attack power
+ * identical to the Warden" — so the honest way to express that is to *read* the Warden's
+ * numbers rather than to retype them. `maxHealth` and `damage` are written out explicitly
+ * even though the spread already carries them, because those two are the requirement and a
+ * reader should not have to evaluate a spread to see that they are equal. Everything the
+ * two heavies share — the whole attack skeleton (`telegraphTime` / `activeTime` /
+ * `recoveryTime` / `attackCooldown` / `attackRange`), the enrage threshold, the score
+ * plumbing — comes from {@link ENEMY_LARGE} unchanged, which is also why the gunship fires
+ * through the *same* `solveWardenAim` and the same `WARDEN` shot block: one attack, two
+ * carriers. A retune of the Warden's shot moves both, and cannot move only one.
+ *
+ * What is its own is **the body and the way it moves**: it flies at
+ * {@link HELICOPTER.altitude} and orbits the player at {@link HELICOPTER.orbitRadius},
+ * so the collision capsule is a 1.9 m airframe rather than a 3.4 m walker, and `moveSpeed`
+ * is the *tangential* speed of that orbit (the orbit's angular rate is derived from it and
+ * the radius, so there is still exactly one speed number).
+ */
+export const ENEMY_HELICOPTER: EnemyStats = {
+  ...ENEMY_LARGE,
+  id: 'helicopter',
+  displayName: 'Gunship',
+
+  /** Identical to the Warden's, on request. Written out so the equality is visible. */
+  maxHealth: ENEMY_LARGE.maxHealth,
+  /** Identical to the Warden's, on request. */
+  damage: ENEMY_LARGE.damage,
+
+  /**
+   * Tangential speed of the orbit, m/s.
+   *
+   * 4.5 m/s at a 16 m radius is roughly 16°/s, i.e. a lap every ~22 s: fast enough to read
+   * as "circling" and slow enough that the player can track it without fighting the mouse.
+   */
+  moveSpeed: 4.5,
+  /** Rooted while it winds up and fires, exactly like the Warden. */
+  attackMoveSpeed: 0,
+  acceleration: 6,
+
+  radius: 1.6,
+  height: 1.9,
+  mass: 1400,
+
+  scoreValue: 2000,
+};
+
 /** Every enemy archetype, keyed by id. */
 export const ENEMY_ARCHETYPES = {
   small: ENEMY_SMALL,
   large: ENEMY_LARGE,
+  helicopter: ENEMY_HELICOPTER,
 } as const;
 
 export type EnemyArchetypeId = keyof typeof ENEMY_ARCHETYPES;
@@ -608,12 +659,19 @@ export const ENEMY = {
  * crates the enemy is standing behind).
  */
 export const HEALTH_BAR = {
-  /** Bar width in metres, per archetype. */
-  width: { small: 0.8, large: 3.0 },
+  /**
+   * Bar width in metres, per archetype.
+   *
+   * The gunship's is a little narrower than the Warden's because its airframe is: 2.6 m of
+   * bar over a 1.9 m body reads as a boss bar, while the Warden's 3.0 m over 3.4 m does.
+   * The bar is also the *only* thing that tells the player how the second boss is doing, so
+   * it is not the place to save pixels.
+   */
+  width: { small: 0.8, large: 3.0, helicopter: 2.6 },
   /** Bar thickness in metres. */
-  height: { small: 0.1, large: 0.26 },
+  height: { small: 0.1, large: 0.26, helicopter: 0.24 },
   /** Gap between the top of the body and the bar, in metres. */
-  topGap: { small: 0.3, large: 0.55 },
+  topGap: { small: 0.3, large: 0.55, helicopter: 0.5 },
   /** Red fill and the dark trough it sits in. */
   fillColour: 0xff3b30,
   trackColour: 0x1b1012,
@@ -722,6 +780,20 @@ export const DIRECTOR = {
    */
   batchSizes: [5, 5, 5, 5, 10],
 
+  /**
+   * Seconds between the Warden's death and the second wave's arrival (phase 11).
+   *
+   * The brief's twenty seconds, and it is announced by the **same** top-centre element the
+   * opening uses — "第二批敌人还有 N 秒到达战场" — rather than by a second mechanism: a run
+   * has exactly two stretches where the field is empty and the player is waiting, and one
+   * countdown element that serves both is one thing to keep legible instead of two.
+   *
+   * It is measured from the tick the Warden's body stops existing, not from the moment it
+   * was killed: "the field is empty" is the same condition that gates the Warden itself,
+   * and reusing it means the two bosses cannot disagree about when a fight ended.
+   */
+  secondWaveCountdown: 20,
+
   /** Minimum distance a spawn point must keep from the player. */
   minSpawnDistanceFromPlayer: 12,
   /** Maximum distance from the player, so enemies are not irrelevant. */
@@ -797,6 +869,7 @@ export const DIRECTOR_TUNING: {
   openingCountdown: number;
   batchInterval: number;
   batchSizes: readonly number[];
+  secondWaveCountdown: number;
   minSpawnDistanceFromPlayer: number;
   maxSpawnDistanceFromPlayer: number;
   minSpawnSeparation: number;
@@ -884,6 +957,69 @@ export const WARDEN = {
 
 
 /**
+ * The gunship's flight and its rotor (phase 11).
+ *
+ * ## Why flight is a band plus an altitude rather than a physics model
+ *
+ * There is no physics engine here on purpose (technical plan §2.1), and a helicopter does
+ * not need one: it holds an **altitude** and an **orbit radius**, and the only thing that
+ * varies is how fast it walks around that circle. Both are expressed in metres so the same
+ * two numbers decide the geometry and the read: at 16 m out and 11 m up the gunship is
+ * ~19 m from the player, inside `WEAPON.falloffStart` (so a body shot does full damage) and
+ * above every piece of level geometry (the tallest is the 6.4 m fence), which is what makes
+ * "it flies over the cover" a fact rather than a hope.
+ *
+ * ## Why 11 m and not higher
+ *
+ * The player's pitch clamp is {@link PLAYER.pitchClampDeg}, so the gunship has to stay
+ * comfortably inside the upward view cone: 11 m up at 16 m out is a 34° look-up, and the
+ * arena's own diagonal keeps the worst case well inside 85°. Higher would read as "in the
+ * sky" but start to be a target the player cannot reach without craning.
+ *
+ * ## The rotor is presentation, but its *rate* is a number here
+ *
+ * 9.5 rad/s is about 1.5 revolutions a second. That is deliberately slower than a real
+ * rotor: at 60 fps a 4-blade head turning at a realistic 400 rpm advances ~1.4 rad between
+ * frames, so the blades alias into a near-static blur and the feature the brief asks for
+ * ("the rotor visibly turns") disappears. At 1.5 rev/s the motion reads at every frame rate
+ * this game runs at.
+ */
+export const HELICOPTER = {
+  /** Height above the arena floor the gunship holds, in metres. */
+  altitude: 11,
+  /** Rate it corrects altitude at, m/s. */
+  climbRate: 4,
+  /** Radius of the circle it walks around the player, in metres. */
+  orbitRadius: 16,
+  /**
+   * How far the orbit radius may drift before it corrects back, in metres.
+   *
+   * A dead-band rather than a servo: a gunship that steers toward an exact radius every
+   * tick jitters visibly when the player walks, because the player's own motion is the
+   * thing the radius is measured from.
+   */
+  orbitTolerance: 3,
+  /** Spin rate of the main rotor, radians per second. Presentation only. */
+  rotorSpinRadPerSec: 9.5,
+  /** Main rotor blades. Four gives the classic cross from below. */
+  rotorBlades: 4,
+  /** Airframe and rotor colours: **black body, orange blades**, as the brief asks. */
+  colours: {
+    body: 0x0e1013,
+    bodyPlate: 0x1b2029,
+    glass: 0x2c3d4f,
+    rotor: 0xff7a1a,
+    rotorEmissive: 0xff5a00,
+    /**
+     * Small emissive on the orange, for the same reason the weapon's muzzle has one: the
+     * level's blue-grey light and the ACES tone mapping turn a plain diffuse orange brown,
+     * and the brief's whole point is that the blades are *orange*.
+     */
+    rotorEmissiveIntensity: 0.4,
+  },
+} as const;
+
+/**
  * Hitstop, in seconds, by impact weight.
  *
  * Implemented as a simulation time scale rather than skipped ticks, so the
@@ -901,7 +1037,15 @@ export const HITSTOP = {
   affectsPlayer: false,
 } as const;
 
-/** Throwable item tuning, driven by the E key. */
+/**
+ * Throwable item tuning, driven by the **Q** key.
+ *
+ * It used to be `E`. Phase 11 gave `E` to the supply crates ({@link PICKUPS}) because the
+ * brief asks for "press E to interact" in as many words, and a key that means two things
+ * depending on where the player is standing is exactly the sort of ambiguity this project
+ * removes rather than documents. `Q` is the next key under the same fingers, so the throw
+ * is still a one-handed action.
+ */
 export const ITEMS = {
   /** Seconds between throws. */
   throwCooldown: 1.2,
@@ -938,6 +1082,102 @@ export const ITEMS = {
 
   /** Seconds before an unexploded item despawns. */
   maxLifetime: 3.5,
+} as const;
+
+/** The two supply crates. Drives the refresh order, the meshes and the E prompt. */
+export type PickupKind = 'ammo' | 'medkit';
+
+/**
+ * Supply crates: the ammo box and the medkit (phase 11).
+ *
+ * ## The rule, in the brief's own terms
+ *
+ *   - both kinds refresh **together**, one of each per beat, in a random part of the map;
+ *   - the beat is `refreshInterval` seconds, and the first beat is the run's first tick;
+ *   - **at most `maxPerKind` of each may exist at once** — while a kind is at its cap that
+ *     kind is skipped, and it starts refreshing again as soon as it is below it;
+ *   - a new crate never overlaps one that is already on the field.
+ *
+ * Those four sentences are the whole system, and they are expressed here as data so the
+ * refresh loop in `game/pickups/pickupSystem.ts` has no numbers of its own.
+ *
+ * ## Why the caps and the interval interact the way they do
+ *
+ * With `maxPerKind = 2`, a player who collects nothing sees the field fill up over two beats
+ * and then stop — the arena never turns into a warehouse, which is what the cap is for. A
+ * player who is collecting sees a fresh pair every twenty seconds, which is the *supply
+ * line* rather than a treat: the run now contains two 4800 HP bosses, and at weak-point
+ * efficiency that is ~274 rounds against the 240 a full belt carries (see
+ * {@link ENEMY_LARGE}). Without the crates the second wave would be unwinnable by
+ * arithmetic rather than by skill, so `ammoRounds` is a balance number and not flavour.
+ *
+ * ## Why the crates do not collide with anything
+ *
+ * They are pickups, not cover: making them solid would mean dynamic collision boxes in the
+ * movement solver and the bullet blocker list, for a 0.9 m box the player is meant to walk
+ * *onto*. Walking through a supply crate and pressing E is the whole interaction.
+ */
+export const PICKUPS = {
+  /** Seconds between refreshes, counted from the run's first tick. */
+  refreshInterval: 20,
+  /**
+   * When the first pair appears, in seconds from the run's first tick.
+   *
+   * Zero rather than one interval: the opening ten seconds are the one stretch where the
+   * player has nothing to shoot and everything to learn, and two crates already standing in
+   * the arena is what teaches "these exist, and E uses them" before the shooting starts.
+   */
+  firstRefreshAt: 0,
+  /** Maximum live crates of **each** kind. At the cap that kind is skipped for the beat. */
+  maxPerKind: 2,
+
+  /** Rounds one ammo crate puts into the reserve. */
+  ammoRounds: 90,
+  /** Health one medkit restores, clamped to `PLAYER.maxHealth`. */
+  healAmount: 50,
+
+  /**
+   * How close the player has to be for `E` to reach a crate, in metres.
+   *
+   * Measured on the ground plane (XZ) rather than in 3D: the crates sit on the floor and so
+   * does the player, and a 3D sphere would make a crate on the east platform unreachable
+   * from the floor below it — which is correct — while also making one on a 0.4 m kerb
+   * unreachable from the kerb's edge, which is not.
+   */
+  interactRange: 2.4,
+  /** Edge length of the crate's cube, in metres. Used for the mesh and the overlap test. */
+  size: 0.9,
+
+  /** Minimum distance between any two crates on the field, in metres (centre to centre). */
+  minSeparation: 3,
+  /** Keep-out band along the arena fence, in metres. */
+  fenceMargin: 2.5,
+  /**
+   * Minimum distance from the player at the moment a crate appears, in metres.
+   *
+   * Without it a "random spot on the map" is occasionally the spot the player is standing
+   * on, and a crate that materialises in your lap reads as a bug rather than as a delivery.
+   */
+  minDistanceFromPlayer: 6,
+  /**
+   * Random candidates drawn per placement before the best of them is kept.
+   *
+   * A rejection budget with a guaranteed fallback rather than a loop that can fail: the
+   * brief says the pair refreshes every twenty seconds, so "no legal spot, nothing spawns"
+   * is not an allowed outcome. The best-clearance candidate is kept and used if nothing
+   * passes outright.
+   */
+  placementAttempts: 48,
+
+  /** Crate colours: **gold** for ammo, **white with a red cross** for the medkit. */
+  colours: {
+    ammoBody: 0xd8a520,
+    ammoTrim: 0x7d5a0d,
+    ammoLatch: 0xfff0b8,
+    medkitBody: 0xeef1f5,
+    medkitTrim: 0xa9b2bd,
+    medkitCross: 0xd4271c,
+  },
 } as const;
 
 /** Renderer and camera tuning that designers may want to touch. */
@@ -1236,6 +1476,8 @@ export type SoundId =
   | 'reloadFinished'
   | 'itemThrown'
   | 'itemExploded'
+  | 'pickupAmmo'
+  | 'pickupMedkit'
   | 'assaultStarted'
   | 'fieldCleared'
   | 'bossSpawned'
@@ -1554,6 +1796,45 @@ export const SOUND_SPECS: Readonly<Record<SoundId, SoundSpec>> = {
     noiseMix: 0.9,
     lowpass: 900,
     noiseSeed: 0x091a2b,
+  },
+
+  // --- Supply crates (phase 11) ---------------------------------------------
+  //
+  // The two crates are the only sounds in the game that mean "you gained something",
+  // so they are told apart by *timbre* rather than by pitch alone: the ammo box is a
+  // bright, metallic two-clack led by noise (a magazine seating), and the medkit is a
+  // warmer, longer, almost pure tone rising a fifth (a seal breaking and a hiss). A
+  // player should be able to tell which one they just used with their eyes on the
+  // gunship rather than on the prompt.
+  /** The ammo box: a short bright metallic clack. */
+  pickupAmmo: {
+    bus: 'ui',
+    gain: 0.5,
+    priority: 55,
+    jitter: 0.05,
+    throttle: null,
+    frequency: 660,
+    frequencySweep: 1.5,
+    attack: 0.003,
+    decay: 0.17,
+    noiseMix: 0.55,
+    lowpass: 7200,
+    noiseSeed: 0xa1b2c3,
+  },
+  /** The medkit: a warmer tone rising a fifth, with a breath of noise on top. */
+  pickupMedkit: {
+    bus: 'ui',
+    gain: 0.55,
+    priority: 60,
+    jitter: 0.04,
+    throttle: null,
+    frequency: 392,
+    frequencySweep: 1.5,
+    attack: 0.02,
+    decay: 0.42,
+    noiseMix: 0.12,
+    lowpass: 3400,
+    noiseSeed: 0xb2c3d4,
   },
 
   // --- Run beats ------------------------------------------------------------

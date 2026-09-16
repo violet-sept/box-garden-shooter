@@ -17,7 +17,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { DIRECTOR, ENEMY_LARGE, ITEMS, PLAYER, SIM } from '#/core/config';
+import { DIRECTOR, ENEMY_LARGE, HELICOPTER, ITEMS, PLAYER, SIM } from '#/core/config';
 import { EventBus } from '#/core/events';
 import type { InputIntent } from '#/core/input';
 import type { Vector3 } from '#/core/math/vec3';
@@ -37,6 +37,7 @@ function intent(overrides: Partial<InputIntent> = {}): InputIntent {
     aim: false,
     reload: false,
     throwItem: false,
+    interact: false,
     toggleView: false,
     lookDeltaX: 0,
     lookDeltaY: 0,
@@ -66,7 +67,12 @@ interface Harness {
     yaw: number;
   }[];
   readonly spawned: { archetype: string; position: Vector3; at: number }[];
-  readonly bossSpawns: { enemyId: number; at: number }[];
+  /** Every boss-tier body that appeared, with which heavy it was. */
+  readonly bossSpawns: { enemyId: number; archetype: string; at: number }[];
+  /** Every supply crate that appeared. */
+  readonly crateSpawns: { id: number; kind: string; position: Vector3; at: number }[];
+  /** Every crate the player used, with what it actually granted. */
+  readonly picked: { id: number; kind: string; amount: number; at: number }[];
   /** Where each thrown item actually went off. */
   readonly explosions: { position: Vector3; radius: number; hits: number }[];
 }
@@ -76,19 +82,24 @@ function makeWorld(seed = 4242): Harness {
   const seen: string[] = [];
   const pending: Harness['pending'] = [];
   const spawned: { archetype: string; position: Vector3; at: number }[] = [];
-  const bossSpawns: { enemyId: number; at: number }[] = [];
+  const bossSpawns: Harness['bossSpawns'] = [];
+  const crateSpawns: Harness['crateSpawns'] = [];
+  const picked: Harness['picked'] = [];
   const explosions: { position: Vector3; radius: number; hits: number }[] = [];
   const world = createWorld({ events, seed });
 
   for (const name of [
     'assault:started',
     'field:cleared',
+    'secondWave:incoming',
     'boss:spawned',
     'boss:died',
     'spawn:pending',
     'enemy:spawned',
     'item:thrown',
     'item:exploded',
+    'pickup:spawned',
+    'pickup:collected',
     'player:damaged',
     'player:died',
     'enemy:died',
@@ -115,7 +126,18 @@ function makeWorld(seed = 4242): Harness {
     });
   });
   events.on('boss:spawned', (payload) => {
-    bossSpawns.push({ enemyId: payload.enemyId, at: world.time });
+    bossSpawns.push({ enemyId: payload.enemyId, archetype: payload.archetype, at: world.time });
+  });
+  events.on('pickup:spawned', (payload) => {
+    crateSpawns.push({
+      id: payload.id,
+      kind: payload.kind,
+      position: { x: payload.position.x, y: payload.position.y, z: payload.position.z },
+      at: world.time,
+    });
+  });
+  events.on('pickup:collected', (payload) => {
+    picked.push({ id: payload.id, kind: payload.kind, amount: payload.amount, at: world.time });
   });
   events.on('item:exploded', (payload) => {
     explosions.push({
@@ -125,7 +147,7 @@ function makeWorld(seed = 4242): Harness {
     });
   });
 
-  return { world, events, seen, pending, spawned, bossSpawns, explosions };
+  return { world, events, seen, pending, spawned, bossSpawns, crateSpawns, picked, explosions };
 }
 
 /** Runs `steps` ticks, letting the caller vary the intent per tick. */
@@ -177,7 +199,7 @@ function dummyCount(world: World): number {
 }
 
 /** Every live combatant of a kind. */
-function live(world: World, kind: 'small' | 'large') {
+function live(world: World, kind: 'small' | 'large' | 'helicopter') {
   return world.enemies.targets.filter((enemy) => enemy.alive && enemy.kind === kind);
 }
 
@@ -187,15 +209,19 @@ function playTo(world: World, phase: string, limitSeconds = 200): void {
   for (let i = 0; i < steps; i += 1) {
     world.tick(DT, intent());
     if (world.director.status.phase === phase) return;
-    // The Warden is only removed once the director has *seen* it: a body that appeared at
-    // the end of this tick cannot have been shot during it (the release queue runs after
-    // the shot), so `BOSS_INCOMING` has to be allowed to become `BOSS_ACTIVE` first.
+    // A heavy is only removed once the director has *seen* it: a body that appeared at the
+    // end of this tick cannot have been shot during it (the release queue runs after the
+    // shot), so `BOSS_INCOMING` / `GUNSHIP_INCOMING` have to be allowed to become their
+    // `_ACTIVE` phase first. Shooting a heavy during its own arrival warning would leave the
+    // director waiting for a body it never observed.
     // Everything dies through the damage pipeline rather than through `despawn`, so the
     // death events (`enemy:died` → `boss:died`) are the real ones.
     const seenBoss = world.director.status.phase === 'BOSS_ACTIVE';
+    const seenGunship = world.director.status.phase === 'GUNSHIP_ACTIVE';
     for (const enemy of [...world.enemies.targets]) {
       if (enemy.kind === 'dummy') continue;
       if (enemy.kind === 'large' && !seenBoss) continue;
+      if (enemy.kind === 'helicopter' && !seenGunship) continue;
       world.enemies.applyDamage(enemy, 1e6, 'body', enemy.position);
     }
   }
@@ -215,7 +241,8 @@ describe('the scripted run is wired end to end', () => {
     expect(world.enemies.liveCount()).toBe(0);
     expect(harness.pending).toHaveLength(0);
     expect(harness.spawned).toHaveLength(0);
-    expect(world.director.status.timer).toBeGreaterThan(0);
+    expect(world.director.status.countdownSeconds).toBeGreaterThan(0);
+    expect(world.director.status.countdownWave).toBe(1);
     // The run's own opening beat has been announced, which is what puts the countdown on
     // screen in the first place.
     expect(harness.seen).toContain('assault:started');
@@ -318,7 +345,7 @@ describe('the scripted run is wired end to end', () => {
     }
   });
 
-  it('releases the Warden once the field is clear, and reaches victory when it dies', () => {
+  it('releases the Warden once the field is clear, and reaches victory when the second wave dies', () => {
     const harness = makeWorld();
     const { world } = harness;
     playTo(world, 'BOSS_INCOMING');
@@ -345,10 +372,28 @@ describe('the scripted run is wired end to end', () => {
     // Only one, ever.
     expect(live(world, 'large')).toHaveLength(1);
 
+    // A whole run later: the second wave, and the same 4800 through the same pipeline — the
+    // brief's "health and attack power identical to the Warden", observed on a real body rather
+    // than only on the table.
+    playTo(world, 'GUNSHIP_ACTIVE');
+    const gunshipId = harness.bossSpawns[1]?.enemyId ?? -1;
+    const gunship = world.enemies.byId(gunshipId);
+    expect(gunship?.kind).toBe('helicopter');
+    expect(gunship?.stats.maxHealth).toBe(ENEMY_LARGE.maxHealth);
+    expect(gunship?.health).toBe(ENEMY_LARGE.maxHealth);
+    expect(gunship?.stats.damage).toBe(ENEMY_LARGE.damage);
+    expect(live(world, 'helicopter')).toHaveLength(1);
+    // It really is in the air, and clear of the floor the Warden walks on.
+    expect(gunship?.position.y).toBeCloseTo(HELICOPTER.altitude, 3);
+
     playTo(world, 'VICTORY');
     expect(harness.seen).toContain('boss:died');
     expect(world.director.status.outcome).toBe('victory');
-    expect(harness.bossSpawns).toHaveLength(1);
+    // Two heavies, in order: the Warden and then the gunship. A run that stopped after the
+    // first one would be a run that ends a boss early, so this is the end-to-end statement of
+    // "the Warden's death is not the end of the run".
+    expect(harness.bossSpawns.map((spawn) => spawn.archetype)).toEqual(['large', 'helicopter']);
+    expect(harness.seen).toContain('secondWave:incoming');
   });
 
   it('never releases the Warden while a single Stalker is alive', () => {
@@ -593,14 +638,15 @@ describe('the run ends and can be restarted', () => {
     expect(harness.seen.filter((name) => name === 'run:defeat')).toHaveLength(1);
   });
 
-  it('reaches VICTORY when the Warden dies, and only once', () => {
+  it('reaches VICTORY when the second wave dies, and only once', () => {
     const harness = makeWorld(7);
     const { world } = harness;
     playTo(world, 'VICTORY', 400);
     expect(world.director.status.outcome).toBe('victory');
     expect(harness.seen).toContain('run:victory');
     expect(harness.seen.filter((name) => name === 'run:victory')).toHaveLength(1);
-    expect(harness.bossSpawns).toHaveLength(1);
+    expect(harness.bossSpawns).toHaveLength(2);
+    expect(world.director.status.gunshipArrived).toBe(true);
 
     // No further arrivals after the win.
     const announced = harness.pending.length;
@@ -632,7 +678,7 @@ describe('the run ends and can be restarted', () => {
     expect(world.stats.enemyHitsLanded).toBe(0);
     expect(world.stats.playerDamageTaken).toBe(0);
     expect(world.enemies.damagedCount()).toBe(0);
-    expect(world.director.status.timer).toBeCloseTo(DIRECTOR.openingCountdown, 6);
+    expect(world.director.status.countdownSeconds).toBeCloseTo(DIRECTOR.openingCountdown, 6);
 
     // And the second run really starts again rather than staying silent: the countdown
     // first, then a fresh batch.

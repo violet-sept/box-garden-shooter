@@ -12,10 +12,11 @@
  * decides.
  */
 
-import { CROSSHAIR, PLAYER, WEAPON } from '../../core/config';
+import { CROSSHAIR, PICKUPS, PLAYER, WEAPON, type PickupKind } from '../../core/config';
 import { spreadToScreenRadius } from '../../game/camera/camera';
 import type { WeaponState } from '../../game/player/weapon';
 import type { LoopMetrics } from '../../core/loop';
+import type { CountdownWave } from '../../game/director/Director';
 
 /** Cached handle on each HUD element, so no lookups happen per frame. */
 export interface HudElements {
@@ -51,14 +52,25 @@ export interface HudElements {
   readonly chargeCount: HTMLElement;
   readonly spreadHint: HTMLElement;
   /**
-   * The opening countdown, top-centre ("第一批敌人还有 N 秒到达战场").
+   * The opening countdown, top-centre ("第 N 批敌人还有 N 秒到达战场").
    *
    * Its own element rather than a `banner` call: a banner is transient by design (it
    * removes itself after 1.6 s) and this one is a *live* readout whose number changes once
    * a second for ten seconds — pushing it through `banner()` would restart the CSS
    * animation on every tick of the number and make the line flash.
+   *
+   * One element serves both countdowns a run has (the opening and the second wave): they
+   * cannot overlap, they occupy the same place on screen, and "a thing at the top of the
+   * screen counting down" is one piece of UI rather than two.
    */
   readonly countdown: HTMLElement;
+  /**
+   * The `E` prompt, bottom-centre ("按 E 拾取 弹药箱（备弹 +90）").
+   *
+   * Shown only while a crate is actually in reach, and its text is derived from
+   * {@link pickupPrompt} so the number it promises is the number the crate grants.
+   */
+  readonly interact: HTMLElement;
   readonly stats: HTMLElement;
   readonly hint: HTMLElement;
   /** Full-screen red vignette, flashed when the player takes damage. */
@@ -156,13 +168,21 @@ export interface HudView {
   /** Small enemies the script has not released yet, for the debug line. */
   readonly enemiesRemaining: number;
   /**
-   * Seconds until the next drop, or `0` when there is nothing to count down.
+   * Seconds left on whichever countdown is running, or `0` when there is none.
    *
-   * Only the opening has a countdown (see {@link countdownText}); later drops are announced
-   * by the ground ring and the spawn blip the game has used since phase 3, so this is the
-   * director's opening timer and zero in every other phase.
+   * Two stretches of a run have one — the opening before the first drop, and the wait after
+   * the Warden falls — and they share this element. Zero means "no clock", which is every
+   * other moment: drops two through five are announced by the ground ring and the spawn blip
+   * the game has used since phase 3, so a permanent clock at the top of the screen would stop
+   * meaning "brace yourself".
    */
   readonly countdownSeconds: number;
+  /** Which countdown {@link countdownSeconds} belongs to. `0` means none. */
+  readonly countdownWave: CountdownWave;
+  /** The crate `E` would use right now, or `null`. Drives the prompt's visibility. */
+  readonly interactTarget: PickupKind | null;
+  /** Live supply crates, for the debug line. */
+  readonly pickupsAlive: number;
   /** True once the player has been killed. */
   readonly dead: boolean;
   /** 1-based number of the next drop. */
@@ -200,7 +220,7 @@ export function formatHealth(health: number, max: number): string {
  * Whether the charge readout should read as empty.
  *
  * A named function rather than an inline `view.charges === 0`, because "the belt is
- * empty" is the cue that the `E` key is about to do nothing — the one readout whose
+ * empty" is the cue that the `Q` key is about to do nothing — the one readout whose
  * *absence* the player needs to notice before pressing it, not after.
  */
 export function chargesEmpty(charges: number): boolean {
@@ -215,23 +235,38 @@ export function healthTone(fraction: number): string {
 }
 
 /**
- * The opening countdown, as one line of text.
+ * A countdown line, as one line of text.
  *
- * "第一批敌人还有 N 秒到达战场" — the brief's "十秒" replaced by the live number, which is
- * the whole point of the line: it is a *countdown*, not an announcement. It says "第一批"
- * because the opening is the only stretch a run has nothing on the field and ten seconds to
- * fill; drops two through five are announced the way every other spawn is (a ground ring
- * plus a blip), and inventing four more countdowns would be four more things on screen
- * saying what the ring already says.
+ * "第 N 批敌人还有 M 秒到达战场" — the brief's words, with the M replaced by the live number,
+ * which is the whole point of the line: it is a *countdown*, not an announcement.
+ *
+ * `wave` is 1 for the opening and 2 for the second wave (the gunship, after the Warden), and
+ * the numbering is the *run's* rather than the HUD's: the player met the Stalkers first and
+ * the gunship second, so "第二批" is what the second countdown has to say. The two share one
+ * element because a run never has both on screen.
  *
  * `ceil` rather than `round`, with a floor of 1: a line that reads "还有 1 秒" has to mean
  * there is time left, and the element is hidden the moment the director stops reporting a
  * countdown — so the number never reaches 0 on screen. The floor covers the sub-second
  * sliver before that happens.
  */
-export function countdownText(seconds: number): string {
+export function countdownText(seconds: number, wave: 1 | 2 = 1): string {
   const shown = Math.max(1, Math.ceil(seconds));
-  return `第一批敌人还有 ${shown} 秒到达战场`;
+  return `第${wave === 2 ? '二' : '一'}批敌人还有 ${shown} 秒到达战场`;
+}
+
+/**
+ * The `E` prompt for one crate kind.
+ *
+ * The amount comes from `PICKUPS` rather than from the string, so a retuned crate cannot
+ * promise the old number — the same "the label and the thing agree" rule the reload prompt
+ * follows. The verb is "拾取" for both kinds because the interaction is one action; the crate
+ * itself is what differs.
+ */
+export function pickupPrompt(kind: PickupKind): string {
+  return kind === 'ammo'
+    ? `按 E 拾取 弹药箱（备弹 +${PICKUPS.ammoRounds}）`
+    : `按 E 拾取 医疗箱（生命 +${PICKUPS.healAmount}）`;
 }
 
 /**
@@ -303,6 +338,7 @@ export function createHud(elements: HudElements): Hud {
   let lastAiming = false;
   let lastCountdown = '';
   let lastCountdownShown = false;
+  let lastInteractPrompt = '';
   let bannerTimer: number | null = null;
 
   /**
@@ -378,21 +414,33 @@ export function createHud(elements: HudElements): Hud {
       // --- Spread readout -----------------------------------------------------
       elements.spreadHint.style.opacity = view.spreadDeg > 1.2 ? '1' : '0';
 
-      // --- Opening countdown --------------------------------------------------
+      // --- Opening / second-wave countdown ------------------------------------
       // Written only when the whole string changes, which is once a second at most: the
       // number is the only part that moves, and a DOM write per frame for a line that
-      // changes 10 times in 10 seconds is exactly the layout thrash this file avoids.
-      const countdownShown = view.countdownSeconds > 0;
+      // changes 20 times in 20 seconds is exactly the layout thrash this file avoids.
+      const countdownShown = view.countdownWave !== 0 && view.countdownSeconds > 0;
       if (countdownShown !== lastCountdownShown) {
         elements.countdown.hidden = !countdownShown;
         lastCountdownShown = countdownShown;
       }
       if (countdownShown) {
-        const line = countdownText(view.countdownSeconds);
+        const line = countdownText(view.countdownSeconds, view.countdownWave === 2 ? 2 : 1);
         if (line !== lastCountdown) {
           elements.countdown.textContent = line;
           lastCountdown = line;
         }
+      }
+
+      // --- The E prompt -------------------------------------------------------
+      // Hidden by writing an empty string rather than by a second boolean: "no crate in
+      // reach" and "the text for no crate" are the same state, and an empty element cannot
+      // be misread as an offer. The element ships hidden in the markup, so the change check
+      // (which starts at the empty string) never has to open it.
+      const prompt = view.interactTarget === null ? '' : pickupPrompt(view.interactTarget);
+      if (prompt !== lastInteractPrompt) {
+        elements.interact.hidden = prompt.length === 0;
+        elements.interact.textContent = prompt;
+        lastInteractPrompt = prompt;
       }
 
       // --- Debug stats --------------------------------------------------------
@@ -405,6 +453,7 @@ export function createHud(elements: HudElements): Hud {
         `steps/frame ${m.stepsLastFrame}  dropped ${m.droppedStepFrames}\n` +
         `spread ${view.spreadDeg.toFixed(2)}°  fov ${view.fovDeg.toFixed(1)}°\n` +
         `batch ${view.batch}/${view.totalBatches}  alive ${view.enemiesAlive}  left ${view.enemiesRemaining}\n` +
+        `supply ${view.pickupsAlive}\n` +
         `seed ${view.seed >>> 0}`;
       if (lines !== lastStatsLines) {
         elements.stats.textContent = lines;

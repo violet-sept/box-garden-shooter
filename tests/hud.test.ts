@@ -17,10 +17,11 @@ import {
   formatHealth,
   healthTone,
   overlayVisibility,
+  pickupPrompt,
   type OverlayMode,
 } from '#/render/hud/hud';
 import { CHANNEL_TOLERANCE_FRAMES, createHitLog } from '#/debug/hitlog';
-import { CROSSHAIR, DIRECTOR, PLAYER, SIM, WEAPON } from '#/core/config';
+import { CROSSHAIR, DIRECTOR, PICKUPS, PLAYER, SIM, WEAPON } from '#/core/config';
 import { createWeaponState } from '#/game/player/weapon';
 import type { GameEvents } from '#/core/events';
 
@@ -62,6 +63,37 @@ describe('HUD formatting', () => {
     expect(seen).toHaveLength(DIRECTOR.openingCountdown);
     expect(seen[0]).toBe(countdownText(DIRECTOR.openingCountdown));
     expect(seen[seen.length - 1]).toBe(countdownText(1 / 60));
+  });
+
+  it('writes the second wave’s countdown with the second wave’s words', () => {
+    // One function, one element, two waves: the only thing that differs is the ordinal, and it
+    // is the *run's* numbering (the player met the Stalkers first) rather than a fresh count.
+    expect(countdownText(DIRECTOR.secondWaveCountdown, 2)).toBe('第二批敌人还有 20 秒到达战场');
+    expect(countdownText(19.2, 2)).toBe('第二批敌人还有 20 秒到达战场');
+    expect(countdownText(4.2, 2)).toBe('第二批敌人还有 5 秒到达战场');
+    expect(countdownText(0, 2)).toBe('第二批敌人还有 1 秒到达战场');
+    // Wave 1 is the default, so every pre-phase-11 caller keeps its words.
+    expect(countdownText(10)).toBe(countdownText(10, 1));
+
+    const seen: string[] = [];
+    for (let remaining = DIRECTOR.secondWaveCountdown; remaining > 0; remaining -= 1 / 60) {
+      const line = countdownText(remaining, 2);
+      if (line !== seen[seen.length - 1]) seen.push(line);
+    }
+    expect(seen).toHaveLength(DIRECTOR.secondWaveCountdown);
+  });
+
+  it('promises the amount the crate actually grants', () => {
+    // The prompt and the crate read the same table entry, so the number on screen cannot drift
+    // from the number the interaction hands over.
+    expect(pickupPrompt('ammo')).toContain('弹药箱');
+    expect(pickupPrompt('ammo')).toContain(`+${PICKUPS.ammoRounds}`);
+    expect(pickupPrompt('medkit')).toContain('医疗箱');
+    expect(pickupPrompt('medkit')).toContain(`+${PICKUPS.healAmount}`);
+    // Both name the key, because the prompt's whole job is teaching which key.
+    expect(pickupPrompt('ammo')).toContain('E');
+    expect(pickupPrompt('medkit')).toContain('E');
+    expect(pickupPrompt('ammo')).not.toBe(pickupPrompt('medkit'));
   });
 
   it('reports an empty magazine and a reload distinctly', () => {

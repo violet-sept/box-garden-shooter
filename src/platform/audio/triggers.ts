@@ -127,12 +127,14 @@ export function soundRequestsForAny(
 
     case 'enemy:died': {
       const died = payload as GameEvents['enemy:died'];
-      return only(died.archetype === 'large' ? 'bossDied' : 'enemyDied');
+      // Anything that is not a Stalker gets the boss death: a heavy falling is a run beat, and
+      // a third archetype must not inherit the small enemy's sound by default.
+      return only(died.archetype === 'small' ? 'enemyDied' : 'bossDied');
     }
 
     case 'spawn:pending': {
       const pending = payload as GameEvents['spawn:pending'];
-      return only(pending.archetype === 'large' ? 'spawnPendingBoss' : 'spawnPending');
+      return only(pending.archetype === 'small' ? 'spawnPending' : 'spawnPendingBoss');
     }
 
     case 'weapon:magazineEmpty':
@@ -147,10 +149,20 @@ export function soundRequestsForAny(
     case 'item:exploded':
       return only('itemExploded');
 
+    // --- Supply crates (phase 11) ---------------------------------------------
+    // The two crates sound different on purpose: the player has to be able to tell
+    // "bullets" from "health" while looking at the gunship rather than at the prompt.
+    case 'pickup:collected':
+      return only((payload as GameEvents['pickup:collected']).kind === 'ammo' ? 'pickupAmmo' : 'pickupMedkit');
+
     case 'assault:started':
       return only('assaultStarted');
     case 'field:cleared':
       return only('fieldCleared');
+    // The second wave's countdown borrows the boss arrival alarm: it *is* the announcement
+    // that the next boss is on its way, and the countdown element is what carries the number.
+    case 'secondWave:incoming':
+      return only('spawnPendingBoss');
     case 'boss:spawned':
       return only('bossSpawned');
 
@@ -160,8 +172,8 @@ export function soundRequestsForAny(
       return only('runDefeat');
 
     default:
-      // `bullet:impact`, `bullet:miss`, `enemy:damaged`, `enemy:spawned`,
-      // `boss:died`, `target:*`, `player:died`, `weapon:reloadCancelled`,
+      // `bullet:impact`, `bullet:miss`, `enemy:damaged`, `enemy:spawned`, `boss:died`,
+      // `pickup:spawned`, `target:*`, `player:died`, `weapon:reloadCancelled`,
       // `player:adsChanged`, `debug:enabled`: intentionally silent.
       return NONE;
   }

@@ -27,7 +27,7 @@
  *     test and the release queue's ceiling are both a tick stale.
  */
 
-import { CAMERA, HITSTOP, ITEMS, SIM, type EnemyArchetypeId } from '../core/config';
+import { CAMERA, HITSTOP, ITEMS, PICKUPS, SIM, type EnemyArchetypeId } from '../core/config';
 import type { EventBus, EventSink } from '../core/events';
 import type { InputIntent } from '../core/input';
 import { createRng, seedFromString, type Rng } from '../core/math/rng';
@@ -60,6 +60,7 @@ import {
 } from './player/player';
 import {
   applyPlayerDamage,
+  healPlayer,
   resetPlayerCombat,
   tickPlayerInvulnerability,
   tickPlayerRegen,
@@ -67,6 +68,7 @@ import {
 import {
   applyRecoilImpulse,
   createWeaponState,
+  grantReserveAmmo,
   resetWeaponState,
   tickRecoil,
   tickWeapon,
@@ -75,6 +77,7 @@ import {
 import { createDirector, type Director, type SpawnCommand, type DirectorContext } from './director/Director';
 import { totalSmallEnemies } from './director/deployment';
 import { createItemSystem, type Explosion, type ItemSystem } from './items/throwable';
+import { createPickupSystem, type Pickup, type PickupSpawnContext, type PickupSystem } from './pickups/pickupSystem';
 
 /** How the world is constructed. Everything injectable is injected. */
 export interface WorldOptions {
@@ -113,8 +116,8 @@ interface PendingSpawn {
   readonly orderId: number;
   readonly position: Vector3;
   readonly warning: number;
-  /** True for the large enemy. */
-  readonly boss: boolean;
+  /** What to create when the warning runs out. */
+  readonly archetype: EnemyArchetypeId;
   /** Seconds of warning left. */
   remaining: number;
 }
@@ -133,6 +136,17 @@ export interface World {
   readonly director: Director;
   /** The in-flight thrown items, for the render layer to draw. */
   readonly items: ItemSystem;
+  /** Every supply crate, active or not, for the render layer to draw. */
+  readonly pickups: PickupSystem;
+  /**
+   * The crate `E` would use right now, or `null`.
+   *
+   * A method rather than a stored field because it is a *question about the player's
+   * position*, and the HUD asks it once per frame to decide whether to show the prompt. The
+   * same call is what the interaction itself uses, so the prompt can never offer a crate the
+   * key will not take.
+   */
+  interactTarget(): Pickup | null;
   /** Simulated seconds. */
   readonly time: number;
   /** The seed this run was built from, so a bug report can reproduce it. */
@@ -207,6 +221,15 @@ export function createWorld(options: WorldOptions): World {
   const items = createItemSystem();
 
   /**
+   * The supply crates.
+   *
+   * Their own random stream, derived from the run's seed (see `createPickupSystem`): crate
+   * positions must not depend on how many shots the player happened to fire, which is what
+   * sharing the combat stream would make them do.
+   */
+  const pickups = createPickupSystem({ seed: seed ^ 0xb17e });
+
+  /**
    * The director's own random stream.
    *
    * Derived rather than shared with `combat`. Under the phase-10 script this stream has one
@@ -233,10 +256,13 @@ export function createWorld(options: WorldOptions): World {
         // is exactly when a player wants the belt full.
         charges = clamp(charges + ITEMS.chargesPerClear, 0, ITEMS.maxCharges);
       },
-      spawnPending(order, archetype) {
+      secondWave(seconds, archetype) {
+        events.emit('secondWave:incoming', { tick: stats.ticks, seconds, archetype });
+      },
+      spawnPending(order) {
         events.emit('spawn:pending', {
           tick: stats.ticks,
-          archetype,
+          archetype: order.archetype,
           position: { x: order.position.x, y: order.position.y, z: order.position.z },
           warning: order.warning,
         });
@@ -290,6 +316,19 @@ export function createWorld(options: WorldOptions): World {
   const orders: SpawnCommand[] = [];
   /** Reused so the item tick allocates nothing. */
   const explosions: Explosion[] = [];
+  /** Reused so the crate refresh allocates nothing. */
+  const spawnedCrates: Pickup[] = [];
+  /**
+   * The crate refresh's view of the world.
+   *
+   * One object built at construction and rewritten in place: `player.position` is a stable
+   * reference, so "where the player is" stays current without an object literal per tick.
+   */
+  const pickupContext: PickupSpawnContext = {
+    playerPosition: player.position,
+    obstacles: collision.obstacles,
+    halfSize: level.halfSize,
+  };
 
   /**
    * Hitstop budget in seconds.
@@ -369,10 +408,10 @@ export function createWorld(options: WorldOptions): World {
     if (result.died) events.emit('player:died', { tick: stats.ticks });
   });
 
-  /** The Warden's death, published once. */
+  /** A boss-tier death, published once. Both heavies are bosses; the archetype says which. */
   events.on('enemy:died', (payload) => {
-    if (payload.archetype !== 'large') return;
-    events.emit('boss:died', { tick: stats.ticks, enemyId: payload.id });
+    if (payload.archetype !== 'large' && payload.archetype !== 'helicopter') return;
+    events.emit('boss:died', { tick: stats.ticks, enemyId: payload.id, archetype: payload.archetype });
   });
 
   const playerEye = { x: 0, y: 0, z: 0 };
@@ -392,7 +431,7 @@ export function createWorld(options: WorldOptions): World {
         orderId: order.orderId,
         position: { x: order.position.x, y: order.position.y, z: order.position.z },
         warning: order.warning,
-        boss: order.boss,
+        archetype: order.archetype,
         remaining: order.warning,
       });
     }
@@ -436,8 +475,8 @@ export function createWorld(options: WorldOptions): World {
         i += 1;
         continue;
       }
-      const archetype: EnemyArchetypeId = queued.boss ? 'large' : 'small';
-      if (!queued.boss && enemies.liveCount('small') >= maxLiveSmall) {
+      const archetype: EnemyArchetypeId = queued.archetype;
+      if (archetype === 'small' && enemies.liveCount('small') >= maxLiveSmall) {
         // Saturated. The order is abandoned rather than retried: the director sees
         // that the run has not progressed and issues another one when there is
         // room, which keeps it at one live order per body.
@@ -454,8 +493,8 @@ export function createWorld(options: WorldOptions): World {
         archetype,
         position: { x: spawned.position.x, y: spawned.position.y, z: spawned.position.z },
       });
-      if (queued.boss) {
-        events.emit('boss:spawned', { tick: stats.ticks, enemyId: spawned.id });
+      if (archetype === 'large' || archetype === 'helicopter') {
+        events.emit('boss:spawned', { tick: stats.ticks, enemyId: spawned.id, archetype });
       }
     }
   };
@@ -485,6 +524,37 @@ export function createWorld(options: WorldOptions): World {
     explosions.length = 0;
   };
 
+  /**
+   * Uses the crate `E` is pointing at, if there is one.
+   *
+   * The effect belongs here rather than in the pickup system for the same reason incoming
+   * damage does: the crate knows *where it is*, and the world owns the player's health and
+   * the weapon's reserve. It is also the only place that can report the honest amount, since
+   * only the player knows how much room there was for it.
+   */
+  const collectPickup = (): void => {
+    const crate = pickups.collect(player.position);
+    if (!crate) return;
+
+    let amount = 0;
+    if (crate.kind === 'ammo') {
+      amount = grantReserveAmmo(weapon, PICKUPS.ammoRounds);
+    } else {
+      amount = healPlayer(player, PICKUPS.healAmount);
+      // A heal that landed is a state change, and the HUD's health bar reads its numbers
+      // from the same event the damage path publishes. A heal of zero is not: nothing moved.
+      if (amount > 0) events.emit('player:stateChanged', { tick: stats.ticks, health: player.health });
+    }
+
+    events.emit('pickup:collected', {
+      tick: stats.ticks,
+      id: crate.id,
+      kind: crate.kind,
+      position: { x: crate.position.x, y: crate.position.y, z: crate.position.z },
+      amount,
+    });
+  };
+
   const world: World = {
     player,
     camera,
@@ -496,6 +566,7 @@ export function createWorld(options: WorldOptions): World {
     stats,
     director,
     items,
+    pickups,
     get time() {
       return time;
     },
@@ -521,9 +592,10 @@ export function createWorld(options: WorldOptions): World {
      *   6. Targets: rebuild every hitbox from this tick's positions.
      *   7. The shot: resolve rays and apply damage.
      *   8. Items: thrown-object integration, detonation and blast resolution.
+     *   8b. Supply crates: the refresh beat, then the `E` interaction.
      *   9. Cleanup: recycle dead enemies and release their attack slots.
-     *  10. Director: the run's script (drops, the Warden's gate), pending spawns, and
-     *      the end of the run.
+     *  10. Director: the run's script (drops, the Warden's gate, the second wave), pending
+     *      spawns, and the end of the run.
      */
     tick(dt, intent) {
       stats.ticks += 1;
@@ -615,6 +687,22 @@ export function createWorld(options: WorldOptions): World {
       items.tick(scaledDt, collision.solids, explosions);
       resolveExplosions();
 
+      // --- 8b. Supply crates --------------------------------------------------
+      // The refresh runs on the same scaled clock as everything else, so a hitstop does not
+      // buy the player supplies; the interaction is edge-triggered like the throw, so one
+      // press of `E` can never take two crates or leak into the next tick.
+      spawnedCrates.length = 0;
+      pickups.tick(scaledDt, pickupContext, spawnedCrates);
+      for (const crate of spawnedCrates) {
+        events.emit('pickup:spawned', {
+          tick: stats.ticks,
+          id: crate.id,
+          kind: crate.kind,
+          position: { x: crate.position.x, y: crate.position.y, z: crate.position.z },
+        });
+      }
+      if (intent.interact && !player.dead) collectPickup();
+
       // --- 9. Cleanup --------------------------------------------------------
       // Dead enemies are recycled in the same tick they die, so a corpse never
       // occupies a hitbox for a frame and never keeps an attack slot. The
@@ -649,6 +737,7 @@ export function createWorld(options: WorldOptions): World {
         playerDead: player.dead,
         smallAlive: enemies.liveCount('small'),
         bossAlive: enemies.liveCount('large') > 0,
+        gunshipAlive: enemies.liveCount('helicopter') > 0,
       };
       director.tick(directorContext, orders);
       queueOrders();
@@ -709,6 +798,11 @@ export function createWorld(options: WorldOptions): World {
       return true;
     },
 
+    /** The crate `E` would use right now, or `null`. The HUD's prompt asks the same question. */
+    interactTarget() {
+      return pickups.nearest(player.position);
+    },
+
     muzzlePosition(out) {
       copy(out, aim.muzzle);
       return out;
@@ -726,9 +820,13 @@ export function createWorld(options: WorldOptions): World {
       enemies.reset();
       director.reset();
       items.clear();
+      // Crates do not survive a restart either: a run's supplies belong to that run, and a
+      // crate carried over would be a free head start plus a stale position on the map.
+      pickups.reset();
       pending.length = 0;
       orders.length = 0;
       explosions.length = 0;
+      spawnedCrates.length = 0;
       charges = options.startingCharges ?? ITEMS.startingCharges;
       time = 0;
       hitstopRemaining = 0;

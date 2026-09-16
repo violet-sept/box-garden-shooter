@@ -32,6 +32,7 @@ function intent(overrides: Partial<InputIntent> = {}): InputIntent {
     aim: false,
     reload: false,
     throwItem: false,
+    interact: false,
     toggleView: false,
     lookDeltaX: 0,
     lookDeltaY: 0,

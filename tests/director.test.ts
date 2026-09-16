@@ -17,6 +17,10 @@
  *      the way `World` does — after the warning — which is what makes that regression
  *      testable at all. The old harness marked the boss alive on the tick it was ordered and
  *      could not see it.
+ *   4. **The Warden's death is not the end of the run** (phase 11). It starts a twenty-second
+ *      countdown, and *that* is followed by the same order-then-arrive pair for the gunship.
+ *      Victory belongs to the second wave's death alone, so a run that stops here would now
+ *      be a run that ends one boss early.
  *
  * Everything here is plain data: a context is a struct literal, and the "world" is a small
  * record with a clock on it.
@@ -40,21 +44,33 @@ const PLAYER: Vector3 = { x: 0, y: 0, z: 8 };
 interface FakeWorld {
   smallAlive: number;
   bossAlive: boolean;
+  gunshipAlive: boolean;
   playerDead: boolean;
   time: number;
   readonly inWarning: { order: SpawnCommand; remaining: number }[];
 }
 
 function harness(seed = 5) {
-  const world: FakeWorld = { smallAlive: 0, bossAlive: false, playerDead: false, time: 0, inWarning: [] };
+  const world: FakeWorld = {
+    smallAlive: 0,
+    bossAlive: false,
+    gunshipAlive: false,
+    playerDead: false,
+    time: 0,
+    inWarning: [],
+  };
   const started: Deployment[] = [];
   const cleared: number[] = [];
   const pending: { command: SpawnCommand; archetype: string }[] = [];
   const smallOrders: SpawnCommand[] = [];
   const bossOrders: SpawnCommand[] = [];
+  const gunshipOrders: SpawnCommand[] = [];
+  /** The second wave's announcements, as `{ seconds, archetype }`. */
+  const secondWaves: { seconds: number; archetype: string }[] = [];
   /** Release times, on the run clock, of each small / boss order. */
   const orderTimes: number[] = [];
   const bossOrderTimes: number[] = [];
+  const gunshipOrderTimes: number[] = [];
   const ended: string[] = [];
   /** Set by `step`, so the event handlers can stamp themselves with the run clock. */
   const clock = { value: 0 };
@@ -68,14 +84,20 @@ function harness(seed = 5) {
       fieldCleared(totalSmall) {
         cleared.push(totalSmall);
       },
-      spawnPending(order, archetype) {
-        pending.push({ command: order, archetype });
-        if (order.boss) {
+      secondWave(seconds, archetype) {
+        secondWaves.push({ seconds, archetype });
+      },
+      spawnPending(order) {
+        pending.push({ command: order, archetype: order.archetype });
+        if (order.archetype === 'small') {
+          smallOrders.push(order);
+          orderTimes.push(clock.value);
+        } else if (order.archetype === 'large') {
           bossOrders.push(order);
           bossOrderTimes.push(clock.value);
         } else {
-          smallOrders.push(order);
-          orderTimes.push(clock.value);
+          gunshipOrders.push(order);
+          gunshipOrderTimes.push(clock.value);
         }
       },
       runEnded(outcome) {
@@ -93,8 +115,11 @@ function harness(seed = 5) {
     pending,
     smallOrders,
     bossOrders,
+    gunshipOrders,
+    secondWaves,
     orderTimes,
     bossOrderTimes,
+    gunshipOrderTimes,
     ended,
   };
 }
@@ -112,6 +137,7 @@ function contextFor(world: FakeWorld, dt: number) {
     playerDead: world.playerDead,
     smallAlive: world.smallAlive,
     bossAlive: world.bossAlive,
+    gunshipAlive: world.gunshipAlive,
   };
 }
 
@@ -129,8 +155,9 @@ function step(h: Harness, dt = DT): SpawnCommand[] {
     if (queued.remaining > 0) continue;
     h.world.inWarning.splice(i, 1);
     h.director.confirmSpawn(queued.order.orderId);
-    if (queued.order.boss) h.world.bossAlive = true;
-    else h.world.smallAlive += 1;
+    if (queued.order.archetype === 'small') h.world.smallAlive += 1;
+    else if (queued.order.archetype === 'large') h.world.bossAlive = true;
+    else h.world.gunshipAlive = true;
   }
   return produced;
 }
@@ -139,11 +166,14 @@ function step(h: Harness, dt = DT): SpawnCommand[] {
 function stepVictorious(h: Harness, dt = DT): SpawnCommand[] {
   const produced = step(h, dt);
   h.world.smallAlive = 0;
-  // The Warden is only removed once the director has *seen* it: a body that appeared at the
-  // end of this tick cannot have been shot during it (the world's release queue runs after
-  // the shot), so the harness must not shoot it either — otherwise `BOSS_INCOMING` would
-  // never become `BOSS_ACTIVE` and the run would sit there for ever.
-  if (h.director.status.phase === 'BOSS_ACTIVE') h.world.bossAlive = false;
+  // A heavy is only removed once the director has *seen* it: a body that appeared at the end
+  // of this tick cannot have been shot during it (the world's release queue runs after the
+  // shot), so the harness must not shoot it either — otherwise `BOSS_INCOMING` (or
+  // `GUNSHIP_INCOMING`) would never become its `_ACTIVE` phase and the run would sit there
+  // for ever.
+  const phase = h.director.status.phase;
+  if (phase === 'BOSS_ACTIVE') h.world.bossAlive = false;
+  if (phase === 'GUNSHIP_ACTIVE') h.world.gunshipAlive = false;
   return produced;
 }
 
@@ -194,7 +224,7 @@ describe('director: the opening countdown', () => {
   it('holds the field empty for the countdown, then starts the drops', () => {
     const h = harness();
     expect(h.director.status.phase).toBe('OPENING');
-    expect(h.director.status.timer).toBeCloseTo(DIRECTOR.openingCountdown, 6);
+    expect(h.director.status.countdownSeconds).toBeCloseTo(DIRECTOR.openingCountdown, 6);
 
     // Just short of the countdown: nothing has been ordered at all.
     const ticks = Math.floor(DIRECTOR.openingCountdown / DT) - 2;
@@ -211,10 +241,10 @@ describe('director: the opening countdown', () => {
 
   it('counts the timer down to the first drop and not past it', () => {
     const h = harness();
-    let previous = h.director.status.timer;
+    let previous = h.director.status.countdownSeconds;
     for (let i = 0; i < Math.floor(DIRECTOR.openingCountdown / DT) - 1; i += 1) {
       step(h);
-      const timer = h.director.status.timer;
+      const timer = h.director.status.countdownSeconds;
       expect(timer).toBeLessThanOrEqual(previous);
       expect(timer).toBeGreaterThan(0);
       previous = timer;
@@ -225,7 +255,7 @@ describe('director: the opening countdown', () => {
     step(h);
     expect(h.smallOrders).toHaveLength(5);
     expect(h.director.status.phase).toBe('DEPLOYING');
-    expect(h.director.status.timer).toBeCloseTo(DIRECTOR.batchInterval, 1);
+    expect(h.director.status.countdownSeconds).toBeCloseTo(DIRECTOR.batchInterval, 1);
   });
 
   it('announces the assault once, on the first tick, with the script in hand', () => {
@@ -331,7 +361,7 @@ describe('director: the Warden’s gate', () => {
     playUntil(h, () => h.bossOrders.length > 0);
     expect(h.cleared).toEqual([30]);
     expect(h.bossOrders).toHaveLength(1);
-    expect(h.bossOrders[0]?.boss).toBe(true);
+    expect(h.bossOrders[0]?.archetype).toBe('large');
 
     // And it is a *gate*, not a coincidence: another minute of empty field adds nothing.
     for (let i = 0; i < 60 * 60; i += 1) {
@@ -381,6 +411,126 @@ describe('director: the Warden’s gate', () => {
   });
 });
 
+describe('director: the second wave', () => {
+  /**
+   * Plays out the Stalkers and the Warden, then takes the tick that *sees* the Warden die.
+   *
+   * `playUntil` stops the moment the Warden's body is first visible (that is what
+   * `BOSS_ACTIVE` means), and its own `stepVictorious` has already cleared the field — so one
+   * more plain `step` is the tick on which the director reads "the Warden is not alive" and
+   * opens the countdown. Returns the run clock at that instant, which is what the countdown is
+   * measured from.
+   */
+  function toSecondWave(h: Harness): number {
+    playUntil(h, () => h.director.status.phase === 'BOSS_ACTIVE');
+    step(h);
+    expect(h.director.status.phase).toBe('GUNSHIP_COUNTDOWN');
+    return h.world.time;
+  }
+
+  it('announces the second wave on the tick the Warden dies, and counts twenty seconds', () => {
+    const h = harness();
+    const wardenDiedAt = toSecondWave(h);
+
+    expect(h.secondWaves).toEqual([{ seconds: DIRECTOR.secondWaveCountdown, archetype: 'helicopter' }]);
+    expect(h.director.status.countdownWave).toBe(2);
+    expect(h.director.status.countdownSeconds).toBeCloseTo(DIRECTOR.secondWaveCountdown, 6);
+    expect(h.director.status.gunshipPending).toBe(true);
+    expect(h.director.status.gunshipReleased).toBe(false);
+    expect(h.gunshipOrders).toHaveLength(0);
+
+    // Monotone down, strictly positive, and nothing ordered while it runs.
+    let previous = h.director.status.countdownSeconds;
+    const ticks = Math.floor(DIRECTOR.secondWaveCountdown / DT) - 2;
+    for (let i = 0; i < ticks; i += 1) {
+      step(h);
+      const remaining = h.director.status.countdownSeconds;
+      expect(remaining).toBeLessThanOrEqual(previous);
+      expect(remaining).toBeGreaterThan(0);
+      previous = remaining;
+      expect(h.director.status.phase).toBe('GUNSHIP_COUNTDOWN');
+      expect(h.gunshipOrders).toHaveLength(0);
+    }
+
+    stepUntil(h, () => h.gunshipOrders.length > 0);
+    const orderedAt = h.gunshipOrderTimes[0] ?? 0;
+    expect(h.gunshipOrders[0]?.archetype).toBe('helicopter');
+    // Measured on the run clock, from the tick the Warden's body left the field — the same
+    // absolute-schedule rule the drops use, so a long frame cannot stretch the wait.
+    expect(orderedAt - wardenDiedAt).toBeGreaterThanOrEqual(DIRECTOR.secondWaveCountdown - DT);
+    expect(orderedAt - wardenDiedAt).toBeLessThan(DIRECTOR.secondWaveCountdown + DT);
+    expect(h.director.status.phase).toBe('GUNSHIP_INCOMING');
+    // The countdown element goes away with the order: one clock, and it stops reporting the
+    // moment there is nothing left to count.
+    expect(h.director.status.countdownWave).toBe(0);
+    expect(h.director.status.countdownSeconds).toBe(0);
+  });
+
+  it('orders the gunship but does not call it arrived, and does not win during its warning', () => {
+    // The same regression as the Warden's, one boss later: `gunshipAlive` is false for the
+    // whole 0.9 s warning, and the field is empty for the whole of it too — so a machine that
+    // only asked about `gunshipAlive` would win the run over an enemy that does not exist yet.
+    const h = harness();
+    toSecondWave(h);
+    stepUntil(h, () => h.gunshipOrders.length > 0);
+    expect(h.director.status.phase).toBe('GUNSHIP_INCOMING');
+    expect(h.director.status.gunshipReleased).toBe(true);
+    expect(h.director.status.gunshipArrived).toBe(false);
+
+    const warningTicks = Math.floor(DIRECTOR.spawnWarningDuration / DT) - 2;
+    for (let i = 0; i < warningTicks; i += 1) {
+      step(h);
+      expect(h.director.status.phase).toBe('GUNSHIP_INCOMING');
+      expect(h.director.status.gunshipArrived).toBe(false);
+      expect(h.world.gunshipAlive).toBe(false);
+      expect(h.ended).toHaveLength(0);
+    }
+
+    stepUntil(h, () => h.world.gunshipAlive);
+    step(h);
+    expect(h.director.status.phase).toBe('GUNSHIP_ACTIVE');
+    expect(h.director.status.gunshipArrived).toBe(true);
+    expect(h.ended).toHaveLength(0);
+    // One order in total: the second wave's phases do not re-order it.
+    expect(h.gunshipOrders).toHaveLength(1);
+  });
+
+  it('never reports victory while the gunship is still flying, and reports it once when it falls', () => {
+    const h = harness();
+    toSecondWave(h);
+    playUntil(h, () => h.director.status.phase === 'GUNSHIP_ACTIVE');
+
+    for (let i = 0; i < 60 * 120; i += 1) {
+      // Set the body *before* the tick, so the run has to notice a gunship that is standing:
+      // editing it after the tick would let the director's verdict go unread.
+      h.world.gunshipAlive = true;
+      step(h);
+    }
+    expect(h.ended).toHaveLength(0);
+    expect(h.director.status.phase).toBe('GUNSHIP_ACTIVE');
+
+    h.world.gunshipAlive = false;
+    step(h);
+    expect(h.director.status.phase).toBe('VICTORY');
+    expect(h.ended).toEqual(['victory']);
+    for (let i = 0; i < 120; i += 1) step(h);
+    expect(h.ended).toEqual(['victory']);
+  });
+
+  it('does not open the countdown while the small enemies are still alive', () => {
+    // The gate is the field, not a clock: a player who leaves one Stalker standing never sees
+    // the second wave's countdown either, because they never finish the first one.
+    const h = harness();
+    for (let i = 0; i < 60 * 60 * 3; i += 1) {
+      step(h);
+      h.world.smallAlive = Math.max(1, h.world.smallAlive);
+    }
+    expect(h.secondWaves).toHaveLength(0);
+    expect(h.director.status.countdownWave).toBe(0);
+    expect(h.director.status.phase).toBe('CLEARING');
+  });
+});
+
 describe('director: ending the run', () => {
   it('enters DEFEAT when the player dies, from any phase', () => {
     const phases = [
@@ -389,6 +539,9 @@ describe('director: ending the run', () => {
       'clearing',
       'boss-incoming',
       'boss-active',
+      'gunship-countdown',
+      'gunship-incoming',
+      'gunship-active',
     ] as const;
     for (const phase of phases) {
       const h = harness();
@@ -401,7 +554,16 @@ describe('director: ending the run', () => {
       } else if (phase === 'boss-incoming') {
         playUntil(h, () => h.bossOrders.length > 0);
       } else {
-        playUntil(h, () => h.director.status.phase === 'BOSS_ACTIVE');
+        // Every later phase is reached by playing the run out with the player winning, which
+        // is the only way to get past the Warden: `playUntil` kills whatever is on the field,
+        // so the run walks itself from one phase to the next.
+        const target = {
+          'boss-active': 'BOSS_ACTIVE',
+          'gunship-countdown': 'GUNSHIP_COUNTDOWN',
+          'gunship-incoming': 'GUNSHIP_INCOMING',
+          'gunship-active': 'GUNSHIP_ACTIVE',
+        }[phase];
+        playUntil(h, () => h.director.status.phase === target);
       }
       h.world.playerDead = true;
       const produced = step(h);
@@ -429,16 +591,18 @@ describe('director: ending the run', () => {
     expect(h.ended).toEqual(['defeat']);
   });
 
-  it('reaches VICTORY only after the Warden has arrived and died, and only once', () => {
+  it('reaches VICTORY only after both heavies have arrived and died, and only once', () => {
     const h = harness();
     playUntil(h, () => h.ended.length > 0);
     expect(h.ended).toEqual(['victory']);
     expect(h.director.status.phase).toBe('VICTORY');
     expect(h.director.status.outcome).toBe('victory');
-    // The body really was on the field: `bossArrived` is the flag that separates "it was
-    // ordered" from "it was killed".
+    // Both bodies really were on the field: `bossArrived` / `gunshipArrived` are the flags
+    // that separate "it was ordered" from "it was killed".
     expect(h.director.status.bossArrived).toBe(true);
+    expect(h.director.status.gunshipArrived).toBe(true);
     expect(h.bossOrders).toHaveLength(1);
+    expect(h.gunshipOrders).toHaveLength(1);
 
     for (let i = 0; i < 600; i += 1) step(h);
     expect(h.ended).toHaveLength(1);
@@ -478,7 +642,7 @@ describe('director: ending the run', () => {
     expect(h.director.status.bossPending).toBe(true);
     expect(h.director.status.bossReleased).toBe(false);
     expect(h.director.acceptsPending()).toBe(true);
-    expect(h.director.status.timer).toBeCloseTo(DIRECTOR.openingCountdown, 6);
+    expect(h.director.status.countdownSeconds).toBeCloseTo(DIRECTOR.openingCountdown, 6);
     // The opening is announced again, which is what makes a restart show the countdown.
     const announcementsBefore = h.started.length;
     step(h);

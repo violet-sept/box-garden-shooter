@@ -13,6 +13,7 @@
  */
 
 import {
+  ENEMY_HELICOPTER,
   ENEMY_LARGE,
   ENEMY_SMALL,
   ENRAGE_COOLDOWN_SCALE,
@@ -192,6 +193,8 @@ export function statsFor(kind: EnemyKind): EnemyStats {
       return ENEMY_SMALL;
     case 'large':
       return ENEMY_LARGE;
+    case 'helicopter':
+      return ENEMY_HELICOPTER;
     default:
       return ENEMY_SMALL;
   }
@@ -225,7 +228,31 @@ export function isAttacking(enemy: EnemyState): boolean {
 
 /** True when a store entry is a live combatant rather than a practice dummy. */
 export function isLiveEnemy(enemy: EnemyState): boolean {
-  return enemy.kind === 'small' || enemy.kind === 'large';
+  return enemy.kind === 'small' || isHeavy(enemy.kind);
+}
+
+/**
+ * Whether an archetype is a **heavy**: the Warden or the gunship (phase 11).
+ *
+ * The two play by one rulebook — the same straight yellow shot, the same
+ * weak-point stagger lever, the same enrage threshold — so every place that used to ask
+ * `kind === 'large'` asks this instead. Retuning "how heavies work" is then one function
+ * rather than a list of comparisons that have to be found and updated together, and the
+ * gunship cannot end up as the one heavy that forgot to enrage.
+ */
+export function isHeavy(kind: EnemyKind): boolean {
+  return kind === 'large' || kind === 'helicopter';
+}
+
+/**
+ * Whether an archetype flies, i.e. holds its own altitude instead of standing on the floor.
+ *
+ * Read by the store's integrator (which skips the ground solve and the level-obstacle
+ * push-out for these bodies) and by nothing else: "does this body obey gravity" is a
+ * property of the archetype, not of a per-spawn flag some caller could forget to set.
+ */
+export function isFlying(kind: EnemyKind): boolean {
+  return kind === 'helicopter';
 }
 
 /** Health at which the Warden enters `ENRAGE`. */

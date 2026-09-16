@@ -18,10 +18,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   ATTACK_SLOTS,
+  ENEMY_HELICOPTER,
   ENEMY_LARGE,
   ENEMY_SMALL,
   ENRAGE_COOLDOWN_SCALE,
   ENRAGE_HEALTH_FRACTION,
+  HELICOPTER,
+  PICKUPS,
   PLAYER,
   SIM,
   WARDEN,
@@ -30,7 +33,7 @@ import {
 import { EventBus, type GameEvents } from '#/core/events';
 import { distanceXZ, vec3 } from '#/core/math/vec3';
 import { aabb, createRayHit, rayAabb, raySphere } from '#/core/math/intersect';
-import { applyPlayerDamage, tickPlayerInvulnerability, tickPlayerRegen } from '#/game/player/combat';
+import { applyPlayerDamage, healPlayer, tickPlayerInvulnerability, tickPlayerRegen } from '#/game/player/combat';
 import type { CollisionWorld, PlayerState } from '#/game/player/player';
 import { createPlayerState } from '#/game/player/player';
 import { createWeaponState } from '#/game/player/weapon';
@@ -776,6 +779,227 @@ describe('Warden: enrage', () => {
   });
 });
 
+describe('Gunship: the second wave', () => {
+  /** Spawns the gunship. Its altitude is the store's business, so the caller passes `y = 0`. */
+  function spawnGunship(h: Harness, x: number, z: number, state: 'SPAWN' | 'IDLE' = 'IDLE'): EnemyState {
+    return h.store.spawn('helicopter', vec3(x, 0, z), { state });
+  }
+
+  /** Runs until the gunship has fired, or gives up noisily. */
+  function runUntilGunshipFired(h: Harness, gunship: EnemyState): void {
+    let guard = 0;
+    while (gunship.shots.length === 0 && guard < 1200) {
+      h.advance(1);
+      guard += 1;
+    }
+    expect(gunship.shots.length, 'the gunship never fired').toBeGreaterThan(0);
+  }
+
+  /** Bearing of the gunship around the player, in radians. */
+  function bearing(h: Harness, gunship: EnemyState): number {
+    return Math.atan2(gunship.position.x - h.player.position.x, gunship.position.z - h.player.position.z);
+  }
+
+  it('carries the Warden’s health, damage and attack skeleton', () => {
+    // The brief in one block: "attack method identical to the Warden, health and attack power
+    // identical to the Warden". Every number here is read from the same table entry the Warden
+    // reads, so a retune of either moves both — which is the point of the shared machine.
+    expect(ENEMY_HELICOPTER.maxHealth).toBe(ENEMY_LARGE.maxHealth);
+    expect(ENEMY_HELICOPTER.damage).toBe(ENEMY_LARGE.damage);
+    expect(ENEMY_HELICOPTER.telegraphTime).toBe(ENEMY_LARGE.telegraphTime);
+    expect(ENEMY_HELICOPTER.activeTime).toBe(ENEMY_LARGE.activeTime);
+    expect(ENEMY_HELICOPTER.recoveryTime).toBe(ENEMY_LARGE.recoveryTime);
+    expect(ENEMY_HELICOPTER.attackCooldown).toBe(ENEMY_LARGE.attackCooldown);
+    expect(ENEMY_HELICOPTER.attackRange).toBe(ENEMY_LARGE.attackRange);
+    expect(ENEMY_HELICOPTER.headshotMultiplier).toBe(ENEMY_LARGE.headshotMultiplier);
+    // And it is its own body rather than a renamed Warden: a 1.9 m airframe with its own
+    // speed, which is what makes the two heavies two fights.
+    expect(ENEMY_HELICOPTER.height).not.toBe(ENEMY_LARGE.height);
+    expect(ENEMY_HELICOPTER.moveSpeed).not.toBe(ENEMY_LARGE.moveSpeed);
+  });
+
+  it('is placed at its altitude and never falls to the floor', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const gunship = spawnGunship(h, 0, -20);
+    // Placed, not taken off: the director's spawn points are ground positions, so a flying
+    // body's `y` is the archetype's business.
+    expect(gunship.position.y).toBeCloseTo(HELICOPTER.altitude, 6);
+    h.run(5);
+    // The flying integrator has no ground solve in it. A gunship that sank to y = 0 would be
+    // a walking gunship.
+    expect(gunship.position.y).toBeCloseTo(HELICOPTER.altitude, 3);
+  });
+
+  it('circles the player at the configured radius instead of closing in', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const gunship = spawnGunship(h, 0, -20);
+    // It starts at the director's spawn distance and walks the radius in.
+    h.run(8);
+
+    /**
+     * Sampled over twenty seconds, and only while the gunship is **holding station**.
+     *
+     * A gunship at 16 m is inside its own 26 m attack range, so it spends most of a cycle
+     * rooted in TELEGRAPH/SHOT/RECOVER — where the shared machine halts it on purpose. The
+     * claim under test is "it circles *between* shots", so measuring it during a wind-up would
+     * be measuring the wrong thing (and would read as zero travel).
+     */
+    let previous = bearing(h, gunship);
+    let swept = 0;
+    let samples = 0;
+    let sign = 0;
+    const increment = DT * (ENEMY_HELICOPTER.moveSpeed / HELICOPTER.orbitRadius);
+    for (let i = 0; i < 60 * 20; i += 1) {
+      const holding = gunship.fsm === 'REPOSITION';
+      h.advance(1);
+      if (holding) {
+        // A dead band, not a chase: the radius holds instead of shrinking.
+        const distance = distanceXZ(gunship.position, h.player.position);
+        expect(Math.abs(distance - HELICOPTER.orbitRadius)).toBeLessThan(HELICOPTER.orbitTolerance + 1.5);
+
+        let delta = bearing(h, gunship) - previous;
+        if (delta > Math.PI) delta -= Math.PI * 2;
+        if (delta < -Math.PI) delta += Math.PI * 2;
+        if (Math.abs(delta) > 1e-9) {
+          samples += 1;
+          swept += delta;
+          if (sign === 0) sign = Math.sign(delta);
+          // One handedness: it goes round, it does not jitter back and forth.
+          expect(Math.sign(delta)).toBe(sign);
+        }
+      }
+      previous = bearing(h, gunship);
+    }
+
+    // It really does spend seconds of the fight circling...
+    expect(samples).toBeGreaterThan(60 * 2);
+    // ...and "how fast does it go round" is exactly one number: `moveSpeed` over the radius.
+    // The bound is one-sided because the ship spends the first part of the window closing the
+    // last of the spawn distance, and those ticks split the same speed between going round and
+    // going in — so the bearing can never advance *faster* than the tangential rate, and only
+    // ever a little slower.
+    expect(Math.abs(swept)).toBeGreaterThan(0.6);
+    expect(Math.abs(swept)).toBeLessThanOrEqual(samples * increment + 1e-9);
+    expect(Math.abs(swept)).toBeGreaterThan(samples * increment * 0.6);
+  });
+
+  it('fires the Warden’s straight line, from its own airframe, at the same damage', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const gunship = spawnGunship(h, 0, -20);
+    runUntilGunshipFired(h, gunship);
+
+    expect(h.shots).toHaveLength(1);
+    const shot = gunship.shots[0];
+    if (!shot) throw new Error('no shot');
+    // The muzzle is on its own airframe, one body radius along the aim and `shotOriginHeight`
+    // above its altitude — the same two rules the Warden's muzzle follows, which is why the
+    // offset is derived from `radius` rather than typed in a second time.
+    expect(shot.origin.y).toBeGreaterThan(HELICOPTER.altitude);
+    const fromBody = Math.hypot(shot.origin.x - gunship.position.x, shot.origin.z - gunship.position.z);
+    expect(fromBody).toBeLessThanOrEqual(ENEMY_HELICOPTER.radius + 1e-6);
+
+    // The line points at the player's chest, so the chest is *on* it.
+    const chest = { x: h.player.position.x, y: h.player.position.y + PLAYER.height * 0.5, z: h.player.position.z };
+    const vx = chest.x - shot.origin.x;
+    const vy = chest.y - shot.origin.y;
+    const vz = chest.z - shot.origin.z;
+    const t = vx * shot.direction.x + vy * shot.direction.y + vz * shot.direction.z;
+    const offLine = Math.hypot(
+      vx - shot.direction.x * t,
+      vy - shot.direction.y * t,
+      vz - shot.direction.z * t,
+    );
+    expect(offLine).toBeLessThan(0.05);
+    expect(Math.hypot(shot.direction.x, shot.direction.y, shot.direction.z)).toBeCloseTo(1, 12);
+    // It comes *down*: the gunship is above the player, and a level shot would miss the body it
+    // is drawn pointing at.
+    expect(shot.direction.y).toBeLessThan(0);
+
+    // Same damage as the Warden, because it is the same attack.
+    h.run(3);
+    const hit = h.damageRequests.find((request) => request.source === 'shot');
+    expect(hit?.amount).toBe(ENEMY_LARGE.damage);
+  });
+
+  it('freezes the direction at launch, exactly like the Warden', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const gunship = spawnGunship(h, 0, -20);
+    runUntilGunshipFired(h, gunship);
+    const shot = gunship.shots[0];
+    if (!shot) throw new Error('no shot');
+    const frozen = { ...shot.direction };
+    h.advance(20);
+    expect(shot.direction.x).toBe(frozen.x);
+    expect(shot.direction.y).toBe(frozen.y);
+    expect(shot.direction.z).toBe(frozen.z);
+  });
+
+  it('holds station while it winds up rather than sliding down its own warning line', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const gunship = spawnGunship(h, 0, -20);
+    for (let i = 0; i < 900 && gunship.fsm !== 'TELEGRAPH'; i += 1) h.advance(1);
+    expect(gunship.fsm).toBe('TELEGRAPH');
+    const frozen = { x: gunship.position.x, z: gunship.position.z };
+    h.advance(10);
+    // Rooted, for the reason the shared machine documents: the telegraph is the player's only
+    // cue, and a body that keeps orbiting during it makes the cue unreadable. "It keeps
+    // circling" is therefore true *between* shots.
+    expect(gunship.position.x).toBeCloseTo(frozen.x, 9);
+    expect(gunship.position.z).toBeCloseTo(frozen.z, 9);
+    expect(Math.hypot(gunship.velocity.x, gunship.velocity.z)).toBe(0);
+  });
+
+  it('enrages at the same threshold as the Warden', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const gunship = spawnGunship(h, 0, -20);
+    const threshold = ENEMY_HELICOPTER.maxHealth * ENRAGE_HEALTH_FRACTION;
+    h.store.applyDamage(gunship, ENEMY_HELICOPTER.maxHealth - threshold - 1, 'body', gunship.position);
+    expect(gunship.enraged).toBe(false);
+    h.store.applyDamage(gunship, 5, 'body', gunship.position);
+    expect(gunship.enraged).toBe(true);
+  });
+
+  it('staggers on cumulative weak-point damage, on the shared lever', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    const gunship = spawnGunship(h, 0, -22);
+    for (let i = 0; i < 900 && gunship.fsm !== 'REPOSITION'; i += 1) h.advance(1);
+    expect(gunship.fsm).toBe('REPOSITION');
+    h.store.applyDamage(gunship, WEAPON.damage, 'body', gunship.position);
+    expect(gunship.fsm).toBe('REPOSITION');
+    const headShot = WEAPON.damage * ENEMY_HELICOPTER.headshotMultiplier;
+    const needed = Math.ceil((ENEMY_HELICOPTER.maxHealth * 0.06) / headShot) + 1;
+    for (let i = 0; i < needed; i += 1) {
+      h.store.applyDamage(gunship, headShot, 'head', gunship.position);
+      if (gunship.fsm === 'STAGGER') break;
+    }
+    expect(gunship.fsm).toBe('STAGGER');
+  });
+
+  it('counts as its own kind, and is not a Warden', () => {
+    const h = harness();
+    h.setLethal(false);
+    h.setPlayer(0, 0);
+    spawnGunship(h, 0, -20);
+    expect(h.store.liveCount('helicopter')).toBe(1);
+    expect(h.store.liveCount('large')).toBe(0);
+    expect(h.store.liveCount()).toBe(1);
+  });
+});
+
 describe('practice dummies', () => {
   it('keeps the phase-1 baseline reachable and excluded from wave bookkeeping', () => {
     const h = harness(emptyWorld(), 3);
@@ -917,6 +1141,34 @@ describe('player damage and invulnerability', () => {
     }
     expect(h.player.dead).toBe(true);
     c.idle(30);
+    expect(h.player.health).toBe(0);
+  });
+
+  it('heals a medkit’s worth of health, clamped, and reports what it restored', () => {
+    // The medkit's half of the supply crates (phase 11). Same contract as the ammo grant: the
+    // number returned is the number the HUD prints, so it has to be the number that landed.
+    const h = harness();
+    const c = clock(h);
+    c.hit(90);
+    const wounded = h.player.health;
+    expect(healPlayer(h.player, PICKUPS.healAmount)).toBe(PICKUPS.healAmount);
+    expect(h.player.health).toBe(wounded + PICKUPS.healAmount);
+
+    // At full health nothing fits, and the crate's grant is honestly zero.
+    h.player.health = PLAYER.maxHealth;
+    expect(healPlayer(h.player, PICKUPS.healAmount)).toBe(0);
+    expect(h.player.health).toBe(PLAYER.maxHealth);
+
+    // Partially short: the clamp is what is reported.
+    h.player.health = PLAYER.maxHealth - 10;
+    expect(healPlayer(h.player, PICKUPS.healAmount)).toBe(10);
+    expect(h.player.health).toBe(PLAYER.maxHealth);
+
+    // A dead player is not resurrected: the run is over from the tick health reached zero, and a
+    // crate that revived them would be a second, undocumented win condition.
+    h.player.health = 0;
+    h.player.dead = true;
+    expect(healPlayer(h.player, PICKUPS.healAmount)).toBe(0);
     expect(h.player.health).toBe(0);
   });
 });

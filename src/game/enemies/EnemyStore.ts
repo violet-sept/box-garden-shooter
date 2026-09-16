@@ -12,11 +12,14 @@
  * What lives here:
  *   - practice dummies (`kind: 'dummy'`), which keep phase 1's tuning baseline
  *     reachable and let the existing whole-world tests keep their assertions;
- *   - live enemies (`kind: 'small' | 'large'`), with an FSM, an attack clock and
- *     the shared `ATTACK_SLOTS` budget;
- *   - spawning from an **injected position**, which is the interface phase 3's
- *     spawn-point filter needs (brief section 1.7): an enemy never chooses where
- *     to appear.
+ *   - live enemies (`kind: 'small' | 'large' | 'helicopter'`), with an FSM, an attack clock
+ *     and the shared `ATTACK_SLOTS` budget. The two heavies share one attack machine
+ *     (`heavyAttacker.ts`) and differ only in how they move between shots;
+ *   - spawning from an **injected position**, which is the interface phase 3's spawn-point
+ *     filter needs (brief section 1.7): an enemy never chooses where to appear. The one
+ *     archetype-level exception is that a **flying** body is placed at its altitude rather
+ *     than at the ground point the caller passed, because every spawn point the director can
+ *     produce is a ground position by construction.
  *
  * Allocation discipline: entries are pooled per archetype and recycled, because a
  * script that releases ten enemies in a single tick must not allocate ten bodies per
@@ -41,6 +44,7 @@ import {
   ENEMY,
   ENEMY_DUMMY,
   ENRAGE_HEALTH_FRACTION,
+  HELICOPTER,
   PLAYER,
   PLAYER_HURTBOX_RADIUS,
   SIM,
@@ -58,12 +62,15 @@ import type { TargetSpec } from '../level';
 import {
   createViewState,
   createWardenAim,
+  isFlying,
+  isHeavy,
   statsFor,
   type EnemyKind,
   type EnemyState,
   type EnemyStateName,
   type WardenShot,
 } from './EnemyState';
+import { tickHelicopter } from './helicopter';
 import { tickLargeWarden } from './largeWarden';
 import { tickSmallStalker, beginStalkerAttackTurn } from './smallStalker';
 
@@ -489,9 +496,9 @@ export function createEnemyStore(dummySpecs: readonly TargetSpec[], events: Even
    *
    * Deliberately **not** part of the FSM. A bolt is a fact in the world from the instant it
    * is fired: it keeps flying while its owner recovers, repositions, is staggered or even
-   * dies, so this runs for every live Warden on every tick regardless of what its state
+   * dies, so this runs for every live heavy on every tick regardless of what its state
    * machine is doing. Tying it to the `SHOT` state (the phase-2 rule for area blasts) would
-   * have left the projectile frozen in mid-air the moment the Warden walked away from it.
+   * have left the projectile frozen in mid-air the moment its owner walked away from it.
    *
    * Each tick is a **swept** test, not a point sample: at 24 m/s the shot covers 0.4 m per
    * tick, and a point test would let it pass through a player between two ticks — the
@@ -577,6 +584,26 @@ export function createEnemyStore(dummySpecs: readonly TargetSpec[], events: Even
     const { position, velocity, stats } = enemy;
     const world = ctx.collision;
 
+    /**
+     * Flying bodies are integrated differently, and the difference is the point of them.
+     *
+     * A gunship holds its own altitude: it does **not** ground-snap (the vertical axis is a
+     * velocity there, not a solve), it does not get pushed out of level geometry (nothing in
+     * the arena is taller than the 6.4 m fence, so at `HELICOPTER.altitude` there is nothing
+     * to be pushed out of), and it does not separate from other enemies (there is exactly one
+     * gunship per run, and it is eleven metres above whatever else is on the field). What
+     * survives is the arena clamp: it can fly far, but not out of the box garden.
+     */
+    if (isFlying(enemy.kind)) {
+      position.x += velocity.x * ctx.dt;
+      position.y += velocity.y * ctx.dt;
+      position.z += velocity.z * ctx.dt;
+      const bound = world.halfSize - stats.radius;
+      position.x = position.x > bound ? bound : position.x < -bound ? -bound : position.x;
+      position.z = position.z > bound ? bound : position.z < -bound ? -bound : position.z;
+      return;
+    }
+
     position.x += velocity.x * ctx.dt;
     resolveEnemyCollision(enemy, world);
     position.z += velocity.z * ctx.dt;
@@ -630,10 +657,10 @@ export function createEnemyStore(dummySpecs: readonly TargetSpec[], events: Even
     enemy.attackCooldown = Math.max(0, enemy.attackCooldown - ctx.dt);
 
     // Shots fly whatever the owner is doing — stunned, recovering, repositioning or dead —
-    // which is why this is here rather than inside the Warden's FSM. It runs before the FSM
-    // so a bolt fired on this tick has moved by the time the render layer reads it, and so
-    // "where the player is" and "whether the line crossed them" describe one world state.
-    if (enemy.kind === 'large') resolveShots(enemy, ctx, ctx.dt);
+    // which is why this is here rather than inside the archetype's FSM. It runs before the
+    // FSM so a bolt fired on this tick has moved by the time the render layer reads it, and
+    // so "where the player is" and "whether the line crossed them" describe one world state.
+    if (isHeavy(enemy.kind)) resolveShots(enemy, ctx, ctx.dt);
 
     if (enemy.stunRemaining > 0) {
       enemy.stunRemaining = Math.max(0, enemy.stunRemaining - ctx.dt);
@@ -650,6 +677,7 @@ export function createEnemyStore(dummySpecs: readonly TargetSpec[], events: Even
 
     if (enemy.kind === 'small') tickSmallStalker(enemy, ctx, store);
     else if (enemy.kind === 'large') tickLargeWarden(enemy, ctx, store);
+    else if (enemy.kind === 'helicopter') tickHelicopter(enemy, ctx, store);
     integrate(enemy, ctx);
   };
   const store: EnemyStore = {
@@ -726,7 +754,11 @@ export function createEnemyStore(dummySpecs: readonly TargetSpec[], events: Even
       // and the render layer may hold a reference. One property changes; the rest of
       // the block is the archetype's.
       Object.assign(enemy.stats, stats);
-      set(enemy.position, position.x, position.y, position.z);
+      // A flying archetype is *placed* at its altitude instead of taking off from the ground.
+      // The director's spawn points are ground positions by construction (they come from the
+      // phase-3 arena sampler), so a gunship released at y = 0 would spend its first three
+      // seconds climbing out of the floor — which reads as a spawn bug, not as a take-off.
+      set(enemy.position, position.x, isFlying(archetype) ? HELICOPTER.altitude : position.y, position.z);
       copy(enemy.previousPosition, enemy.position);
       enemy.hitboxes = buildHitboxes(enemy.stats, enemy.position, enemy.hitboxes);
       resetEnemy(enemy, enemy.stats.maxHealth);
@@ -778,10 +810,11 @@ export function createEnemyStore(dummySpecs: readonly TargetSpec[], events: Even
         enemy.stateTime = 0;
       }
 
-      // The Warden's weak point is its stagger lever (technical plan section
-      // 3.2.4): a single body shot can never interrupt it, so cumulative
-      // weak-point damage is what buys the player a window.
-      if (enemy.kind === 'large') {
+      // A heavy's weak point is its stagger lever (technical plan section 3.2.4): a single
+      // body shot can never interrupt it, so cumulative weak-point damage is what buys the
+      // player a window. Both heavies — the Warden and the gunship — use the same lever,
+      // because a second boss with a second rule would be a second thing to learn.
+      if (isHeavy(enemy.kind)) {
         if (zone === 'head') enemy.weakPointDamageSinceStagger += amount;
         const threshold = enemy.stats.maxHealth * 0.06;
         if (enemy.weakPointDamageSinceStagger >= threshold && enemy.fsm === 'REPOSITION') {
@@ -805,7 +838,7 @@ export function createEnemyStore(dummySpecs: readonly TargetSpec[], events: Even
         direction: direction ?? ZERO,
       });
 
-      if (enemy.kind === 'large' && !enemy.enraged && enemy.health > 0 && enemy.health <= enemy.stats.maxHealth * ENRAGE_HEALTH_FRACTION) {
+      if (isHeavy(enemy.kind) && !enemy.enraged && enemy.health > 0 && enemy.health <= enemy.stats.maxHealth * ENRAGE_HEALTH_FRACTION) {
         // Enrage is a numeric modifier, never a second state machine: this flips a
         // flag the frame reader consults and gives the change one readable beat.
         enemy.enraged = true;

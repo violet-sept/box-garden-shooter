@@ -100,6 +100,28 @@ export function tickPlayerRegen(state: PlayerState, dt: number, time: number): v
   state.health = clamp(state.health + PLAYER.regenRate * dt, 0, state.maxHealth);
 }
 
+/**
+ * Restores health, clamped to the maximum, and returns what was **actually** restored.
+ *
+ * The counterpart of {@link applyPlayerDamage}, and it exists for the medkit crate (phase
+ * 11). Two rules are deliberate:
+ *
+ *   - **A dead player cannot be healed.** The run is over from the tick health reached zero,
+ *     and a crate that resurrected the player would be a second, undocumented win condition.
+ *   - **It does not touch `lastDamageTime`.** Regeneration's delay is measured from the last
+ *     *hit*, and using a medkit under fire should not also start the regen clock — that would
+ *     make one crate worth 50 HP plus an immediate 12 HP/s, which is a different item.
+ *
+ * The return value is the honest number rather than the requested one: a medkit used at full
+ * health heals nothing, and the HUD says "+0" instead of promising 50.
+ */
+export function healPlayer(state: PlayerState, amount: number): number {
+  if (state.dead || amount <= 0) return 0;
+  const before = state.health;
+  state.health = clamp(state.health + amount, 0, state.maxHealth);
+  return state.health - before;
+}
+
 /** Restores the combat bookkeeping to spawn condition. */
 export function resetPlayerCombat(state: PlayerState): void {
   initPlayerCombat(state);

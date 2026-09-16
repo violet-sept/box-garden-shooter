@@ -29,7 +29,7 @@ import {
   Sprite,
   SpriteMaterial,
 } from 'three';
-import { HEALTH_BAR, ENEMY_ARCHETYPES, type EnemyArchetypeId } from '../../core/config';
+import { HEALTH_BAR, ENEMY_ARCHETYPES, HELICOPTER, type EnemyArchetypeId } from '../../core/config';
 import type { EnemyState } from '../../game/enemies/EnemyState';
 import { LAYER_DEFAULT } from './CharacterLoader';
 
@@ -55,6 +55,14 @@ interface BodySlot {
   readonly glow: { material: MeshStandardMaterial; base: number }[];
   /** Upper body that pitches forward during a telegraph. */
   readonly leaner: Object3D | null;
+  /**
+   * Parts that turn continuously, with the local axis they turn about.
+   *
+   * The gunship's two rotors (phase 11). Kept as a list rather than as two named fields so
+   * the tick that drives them does not need to know how many a given body has, and the axis
+   * is per part because a main rotor turns about Y and a tail rotor about X.
+   */
+  readonly spinners: { object: Object3D; axis: 'x' | 'y' }[];
   /** Every mesh under the body, so the shadow flags can be switched in one place. */
   readonly meshes: Mesh[];
   /** The red bar over this body's head. */
@@ -226,7 +234,7 @@ export function createEnemyView(): EnemyView {
         // exists for live combatants.
         if (enemy.kind === 'dummy' || !enemy.alive) continue;
         const slot = acquire(enemy.kind);
-        syncBody(slot, enemy, a);
+        syncBody(slot, enemy, a, dt);
       }
 
       // Anything not claimed this frame was not reported, so the simulation stopped
@@ -273,13 +281,24 @@ export function createEnemyView(): EnemyView {
 }
 
 /** Places one body and applies its presentation state. */
-function syncBody(slot: BodySlot, enemy: EnemyState, alpha: number): void {
+function syncBody(slot: BodySlot, enemy: EnemyState, alpha: number, dt: number): void {
   slot.root.position.set(
     enemy.previousPosition.x + (enemy.position.x - enemy.previousPosition.x) * alpha,
     enemy.previousPosition.y + (enemy.position.y - enemy.previousPosition.y) * alpha,
     enemy.previousPosition.z + (enemy.position.z - enemy.previousPosition.z) * alpha,
   );
   slot.root.rotation.y = enemy.view.yaw;
+
+  // --- Rotors ----------------------------------------------------------------
+  // Advanced by **render** time, like every other animation in this layer: the blades keep
+  // turning at full speed through a hitstop, which is what stops a frozen world from looking
+  // like a stalled engine. The rate is a config number (`HELICOPTER.rotorSpinRadPerSec`) and
+  // is deliberately slower than a real rotor — see that table's header for the aliasing
+  // argument.
+  if (slot.spinners.length > 0) {
+    const spin = HELICOPTER.rotorSpinRadPerSec * dt;
+    for (const spinner of slot.spinners) spinner.object.rotation[spinner.axis] += spin;
+  }
 
   // --- Health bar ------------------------------------------------------------
   // `stats.maxHealth` rather than a shared archetype constant: the store hands each body
@@ -363,6 +382,24 @@ function buildBody(kind: EnemyArchetypeId, barMaterials: BarMaterials): BodySlot
     return mesh;
   };
 
+  /**
+   * The same treatment as {@link addMesh}, but parented to a spinning sub-group.
+   *
+   * The layer assignment is *not* inherited from the parent group, so a blade added to a rotor
+   * without this would be on layer 0 and vanish from the render — the same trap, one level
+   * deeper. It is why the two helpers exist rather than one with a parent parameter that a
+   * later edit could forget to route the layers through.
+   */
+  const addSpinning = (parent: Object3D, mesh: Mesh): Mesh => {
+    mesh.layers.disableAll();
+    mesh.layers.enable(LAYER_DEFAULT);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    meshes.push(mesh);
+    return mesh;
+  };
+
   if (kind === 'large') {
     // Warden: wide, armoured, three heavy segments. Reads as architecture.
     const bodyMaterial = new MeshStandardMaterial({ color: PALETTE.wardenBody, roughness: 0.55, metalness: 0.55 });
@@ -404,7 +441,99 @@ function buildBody(kind: EnemyArchetypeId, barMaterials: BarMaterials): BodySlot
     addMesh(head);
     leaner = head;
 
-    return { root, kind, glow, leaner, meshes, bar, deadSince: null, claimed: true };
+    return { root, kind, glow, leaner, spinners: [], meshes, bar, deadSince: null, claimed: true };
+  }
+
+  if (kind === 'helicopter') {
+    // Gunship: a black airframe with **orange** rotors (the brief's two colours), sized to
+    // its 1.6 m collision radius — the rotor disc is exactly the body's width, so "where the
+    // blades are" and "where a bullet stops" are the same circle.
+    const body = new MeshStandardMaterial({ color: HELICOPTER.colours.body, roughness: 0.5, metalness: 0.55 });
+    const plate = new MeshStandardMaterial({ color: HELICOPTER.colours.bodyPlate, roughness: 0.45, metalness: 0.7 });
+    const glass = new MeshStandardMaterial({ color: HELICOPTER.colours.glass, roughness: 0.15, metalness: 0.35 });
+    const rotorBase = HELICOPTER.colours.rotorEmissiveIntensity;
+    const rotor = new MeshStandardMaterial({
+      color: HELICOPTER.colours.rotor,
+      roughness: 0.35,
+      metalness: 0.25,
+      emissive: HELICOPTER.colours.rotorEmissive,
+      emissiveIntensity: rotorBase,
+    });
+    // The blades are the glow channel, so the whole disc lights up orange-white as the shot
+    // charges. That is the gunship's telegraph cue at a distance, and the reason the rotor
+    // material is the one that ramps rather than the fuselage.
+    glow.push({ material: rotor, base: rotorBase });
+
+    const hull = new Mesh(new BoxGeometry(1.1, 0.95, 3.0), body);
+    hull.position.y = 0.95;
+    addMesh(hull);
+
+    const canopy = new Mesh(new BoxGeometry(0.95, 0.7, 0.95), glass);
+    canopy.position.set(0, 1.05, 1.5);
+    addMesh(canopy);
+
+    const belly = new Mesh(new BoxGeometry(0.8, 0.35, 1.6), plate);
+    belly.position.y = 0.45;
+    addMesh(belly);
+
+    // Tail: a boom and a fin. Together with the 3 m hull these are what make the silhouette
+    // read as a helicopter from any angle, including straight up.
+    const boom = new Mesh(new BoxGeometry(0.34, 0.34, 1.9), plate);
+    boom.position.set(0, 1.3, -2.2);
+    addMesh(boom);
+
+    const fin = new Mesh(new BoxGeometry(0.12, 0.75, 0.5), plate);
+    fin.position.set(0, 1.6, -3.05);
+    addMesh(fin);
+
+    for (const side of [-1, 1]) {
+      const skid = new Mesh(new BoxGeometry(0.08, 0.08, 2.4), plate);
+      skid.position.set(side * 0.6, 0.22, 0.1);
+      addMesh(skid);
+    }
+
+    const mast = new Mesh(new CylinderGeometry(0.1, 0.12, 0.42, 8), plate);
+    mast.position.y = 1.6;
+    addMesh(mast);
+
+    // --- Main rotor: four arms on one spinning group ---------------------------
+    const mainRotor = new Group();
+    mainRotor.name = 'rotor:main';
+    mainRotor.position.y = 1.82;
+    root.add(mainRotor);
+    addSpinning(mainRotor, new Mesh(new CylinderGeometry(0.17, 0.17, 0.12, 10), plate));
+    for (let i = 0; i < HELICOPTER.rotorBlades; i += 1) {
+      const angle = (i / HELICOPTER.rotorBlades) * Math.PI * 2;
+      // Each arm is a bar of half the rotor's diameter, placed at half that length along its
+      // own direction — so "how long is an arm" is one number and the disc's diameter is
+      // twice it, whatever the blade count.
+      const blade = new Mesh(new BoxGeometry(0.24, 0.05, 1.5), rotor);
+      blade.position.set(Math.sin(angle) * 0.75, 0, Math.cos(angle) * 0.75);
+      blade.rotation.y = angle;
+      addSpinning(mainRotor, blade);
+    }
+
+    // --- Tail rotor: two blades on a vertical disc ----------------------------
+    const tailRotor = new Group();
+    tailRotor.name = 'rotor:tail';
+    tailRotor.position.set(0.34, 1.62, -3.0);
+    root.add(tailRotor);
+    addSpinning(tailRotor, new Mesh(new BoxGeometry(0.06, 1.4, 0.12), rotor));
+
+    return {
+      root,
+      kind,
+      glow,
+      leaner: null,
+      spinners: [
+        { object: mainRotor, axis: 'y' },
+        { object: tailRotor, axis: 'x' },
+      ],
+      meshes,
+      bar,
+      deadSince: null,
+      claimed: true,
+    };
   }
 
   // Stalker: narrow, forward-leaning, glowing head. Reads as an animal.
@@ -445,7 +574,7 @@ function buildBody(kind: EnemyArchetypeId, barMaterials: BarMaterials): BodySlot
   addMesh(head);
   leaner = head;
 
-  return { root, kind, glow, leaner, meshes, bar, deadSince: null, claimed: true };
+  return { root, kind, glow, leaner, spinners: [], meshes, bar, deadSince: null, claimed: true };
 }
 
 /**

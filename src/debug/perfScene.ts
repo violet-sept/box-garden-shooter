@@ -127,6 +127,9 @@ export function createPerfScene(options: PerfSceneOptions = {}): PerfScene {
     aim: false,
     reload: false,
     throwItem: false,
+    // Never pressed: the scene drives the *simulation cost* of 120 bodies and a sweeping aim,
+    // and a supply crate taken mid-measurement would add a one-off I/O beat to the reading.
+    interact: false,
     // Never toggled: the acceptance run measures one view mode, and a scene that flipped
     // mid-measurement would compare two different frame costs under one number.
     toggleView: false,

@@ -231,7 +231,7 @@ describe('event to sound mapping', () => {
       idsFor('assault:started', { tick: 1, totalSmall: 30, totalDrops: 5, firstDropIn: 10 }),
     ).toEqual(['assaultStarted']);
     expect(idsFor('field:cleared', { tick: 1, totalSmall: 30 })).toEqual(['fieldCleared']);
-    expect(idsFor('boss:spawned', { tick: 1, enemyId: 1 })).toEqual(['bossSpawned']);
+    expect(idsFor('boss:spawned', { tick: 1, enemyId: 1, archetype: 'large' })).toEqual(['bossSpawned']);
     expect(idsFor('run:victory', { tick: 1, elapsed: 600 })).toEqual(['runVictory']);
     expect(idsFor('run:defeat', { tick: 1, elapsed: 200 })).toEqual(['runDefeat']);
   });
@@ -241,7 +241,7 @@ describe('event to sound mapping', () => {
     // the shot's tail instead. `boss:died` is already the Warden's `enemy:died`.
     expect(idsFor('bullet:impact', { tick: 1, shotId: 1, point: P, normal: P, surface: 'concrete', distance: 3 })).toEqual([]);
     expect(idsFor('bullet:miss', { tick: 1, shotId: 1, end: P })).toEqual([]);
-    expect(idsFor('boss:died', { tick: 1, enemyId: 1 })).toEqual([]);
+    expect(idsFor('boss:died', { tick: 1, enemyId: 1, archetype: 'large' })).toEqual([]);
     expect(idsFor('weapon:reloadCancelled', { tick: 1 })).toEqual([]);
     expect(idsFor('player:died', { tick: 1 })).toEqual([]);
   });

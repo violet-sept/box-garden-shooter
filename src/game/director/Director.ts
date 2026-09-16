@@ -4,34 +4,45 @@
  * A state machine that reads "what is true about the world this tick" and produces "what
  * should be spawned". It never touches the enemy store (hard rule 13): the `World`
  * executes the orders. That separation is what lets every transition — the drops, the
- * Warden's gate, the victory — be tested without building a world at all, which matters
- * because "the boss appeared while a Stalker was still alive" is exactly the sort of thing
- * that only fails in a real run.
+ * Warden's gate, the second wave's countdown, the victory — be tested without building a
+ * world at all, which matters because "the boss appeared while a Stalker was still alive"
+ * is exactly the sort of thing that only fails in a real run.
  *
- * ## The script (phase 10)
+ * ## The script (phases 10 and 11)
  *
- *   t = 0 … 10 s      OPENING     the countdown the HUD shows; nothing on the field
- *   t = 10 … 50 s     DEPLOYING   five drops of 5/5/5/5/10, ten seconds apart
- *   field clear       CLEARING    every drop is out; waiting for the arena to empty
- *   Warden ordered    BOSS_INCOMING  the order is in, the body is not (0.9 s warning)
- *   Warden alive      BOSS_ACTIVE   it is on the field
- *   Warden dead       VICTORY
+ * ```
+ *   t = 0 … 10 s          OPENING            the countdown the HUD shows; nothing on the field
+ *   t = 10 … 50 s         DEPLOYING          five drops of 5/5/5/5/10, ten seconds apart
+ *   field clear           CLEARING           every drop is out; waiting for the arena to empty
+ *   Warden ordered        BOSS_INCOMING      the order is in, the body is not (0.9 s warning)
+ *   Warden alive          BOSS_ACTIVE        it is on the field
+ *   Warden dead           GUNSHIP_COUNTDOWN  "第二批敌人还有 N 秒到达战场" — 20 s, on the clock
+ *   gunship ordered       GUNSHIP_INCOMING   again: the order is in, the body is not
+ *   gunship alive         GUNSHIP_ACTIVE     it is on the field
+ *   gunship dead          VICTORY
+ * ```
  *
- * Two rules are load-bearing and are why this is not the phase-3 state machine with
- * different numbers:
+ * ## Four rules are load-bearing
  *
- *   1. **The Warden's gate is "the field is clear", and there is no other unlock.**
- *      There is no timeout backstop: a player who never kills the last Stalker never
- *      meets the boss. Both halves of that sentence are the feature.
- *   2. **"Ordered" and "arrived" are two different states.** Phase 3 released the Warden
- *      by setting its phase to `BOSS_ACTIVE` at the moment of the *order*, and then read
+ *   1. **The Warden's gate is "the field is clear", and there is no other unlock.** There is
+ *      no timeout backstop: a player who never kills the last Stalker never meets the boss.
+ *      Both halves of that sentence are the feature.
+ *   2. **"Ordered" and "arrived" are two different states.** Phase 3 released the Warden by
+ *      setting its phase to `BOSS_ACTIVE` at the moment of the *order*, and then read
  *      `ctx.bossAlive` — which is false until the body exists 0.9 s later. With the field
  *      already cleared, the very next tick took the "`!bossAlive`" branch and declared the
  *      run cleared **during the Warden's own spawn warning** (measured: the wave closed 53
- *      ticks, 0.88 s, before the ordered body appeared; on the final wave that was a
- *      victory with the boss still in its warning). No test caught it because the director
- *      tests' fake world marks the boss alive on the same tick it is ordered. Hence
- *      `BOSS_INCOMING`: the body has to be *seen* before it can be missed.
+ *      ticks, 0.88 s, before the ordered body appeared; on the final wave that was a victory
+ *      with the boss still in its warning). Phase 10 split it into `BOSS_INCOMING`; phase 11
+ *      gives the second wave the same pair of phases, because the same mistake would now be
+ *      "you win while the gunship is still in its warning".
+ *   3. **The second wave's countdown is measured on the run clock, not from "the Warden
+ *      died".** It starts on the tick the Warden's body stops existing and ends
+ *      `DIRECTOR.secondWaveCountdown` seconds later, so the number on screen and the arrival
+ *      cannot drift, and a long frame delays when a beat is *noticed* rather than which
+ *      second it belongs to.
+ *   4. **Victory is the gunship's death.** The run is not over when the Warden falls: the
+ *      brief's second wave is the end of it, and the phase only exists to say so.
  *
  * ## Where the random stream went
  *
@@ -53,9 +64,9 @@ export interface DirectorContext {
   /**
    * Simulated seconds since the run started.
    *
-   * Drop times are measured against this rather than against a per-drop countdown, so
-   * the schedule is absolute: a long frame or a hitstop can delay when a drop is
-   * *noticed*, never which second it belongs to.
+   * Drop times and the second wave's countdown are measured against this rather than against
+   * a per-drop countdown, so the schedule is absolute: a long frame or a hitstop can delay
+   * when a drop is *noticed*, never which second it belongs to.
    */
   readonly time: number;
   readonly dt: number;
@@ -65,6 +76,8 @@ export interface DirectorContext {
   /** Live combatants with the practice dummies already excluded (`liveCount()`). */
   readonly smallAlive: number;
   readonly bossAlive: boolean;
+  /** Live gunships. Only ever 0 or 1, and never 1 while `bossAlive` is true. */
+  readonly gunshipAlive: boolean;
 }
 
 /** One "spawn here" order. */
@@ -81,8 +94,14 @@ export interface SpawnCommand {
   readonly position: Vector3;
   /** Seconds the ground warning runs before the body appears. */
   readonly warning: number;
-  /** True for the large enemy. There is exactly one per run. */
-  readonly boss: boolean;
+  /**
+   * What to spawn.
+   *
+   * The archetype itself rather than the old `boss: boolean`: with three archetypes in the
+   * script a flag would have to grow a second flag next to it, and the world's job here is
+   * literally "make this kind of enemy at this point".
+   */
+  readonly archetype: EnemyArchetypeId;
 }
 
 /** Which phase the machine is in. Kept as values so tests can read it directly. */
@@ -92,11 +111,25 @@ export type DirectorPhase =
   | 'CLEARING'
   | 'BOSS_INCOMING'
   | 'BOSS_ACTIVE'
+  | 'GUNSHIP_COUNTDOWN'
+  | 'GUNSHIP_INCOMING'
+  | 'GUNSHIP_ACTIVE'
   | 'VICTORY'
   | 'DEFEAT';
 
 /** The run's outcome, or `'running'` while it is still going. */
 export type RunOutcome = 'running' | 'victory' | 'defeat';
+
+/**
+ * Which countdown is on screen, if any.
+ *
+ * `1` and `2` are the two the run has — the opening and the second wave — and they are
+ * numbered rather than named because the number *is* the text the HUD prints
+ * ("第 N 批敌人还有 …"). Zero means "there is no countdown right now", which is every other
+ * phase: drops two through five are announced by the ground ring and the spawn blip, not by a
+ * clock at the top of the screen.
+ */
+export type CountdownWave = 0 | 1 | 2;
 
 /** Broadcast facts the world turns into events. */
 export interface DirectorEvents {
@@ -104,7 +137,20 @@ export interface DirectorEvents {
   assaultStarted(script: Deployment): void;
   /** Every drop is out and the arena is empty — the beat before the Warden. */
   fieldCleared(totalSmall: number): void;
-  spawnPending(order: SpawnCommand, archetype: EnemyArchetypeId): void;
+  /**
+   * The Warden is down and the second wave's countdown has started.
+   *
+   * The seconds are on the payload so the announcement can name the wait; the *live* number
+   * is on {@link DirectorStatus.countdownSeconds}, which the HUD reads every frame.
+   */
+  secondWave(seconds: number, archetype: EnemyArchetypeId): void;
+  /**
+   * An enemy has been ordered.
+   *
+   * The archetype is on the order itself, so there is one channel for "what is coming"
+   * rather than an order plus a parallel parameter that could disagree with it.
+   */
+  spawnPending(order: SpawnCommand): void;
   runEnded(outcome: 'victory' | 'defeat'): void;
 }
 
@@ -124,8 +170,13 @@ export interface DirectorStatus {
   dropsReleased: number;
   /** Small enemies still to be released. */
   remaining: number;
-  /** Seconds until the next drop, while there is one; 0 in every later phase. */
-  timer: number;
+  /**
+   * The countdown on screen, in seconds: the next drop during the opening, the second wave
+   * after the Warden. Zero whenever no clock is running, which is what hides the element.
+   */
+  countdownSeconds: number;
+  /** Which countdown {@link countdownSeconds} belongs to. Zero means none. */
+  countdownWave: CountdownWave;
   /**
    * The release bookkeeping, exposed so a test can assert it rather than infer it:
    * `spawnedSmall` is how many bodies have actually appeared, `inFlightSmall` how many
@@ -141,6 +192,12 @@ export interface DirectorStatus {
   bossArrived: boolean;
   /** False until the Warden's order has been issued. Diagnostics, not rules. */
   bossReleased: boolean;
+  /** True while the run still owes the player a second wave. */
+  gunshipPending: boolean;
+  /** False while the gunship is ordered but its body does not exist yet. */
+  gunshipArrived: boolean;
+  /** False until the gunship's order has been issued. Diagnostics, not rules. */
+  gunshipReleased: boolean;
 }
 
 /** The director's public surface. */
@@ -205,6 +262,11 @@ export function createDirector({ seed, events }: DirectorOptions): Director {
   let bossReleased = false;
   /** Set when the Warden's body is first seen. The gate between the two boss phases. */
   let bossArrived = false;
+  /** The same pair for the second wave. */
+  let gunshipReleased = false;
+  let gunshipArrived = false;
+  /** Run clock at which the second wave's countdown started. */
+  let secondWaveAt = 0;
   /** Small enemies whose body has appeared. Diagnostics. */
   let spawnedSmall = 0;
   /** Orders issued but not yet reflected in `ctx.smallAlive`. */
@@ -227,13 +289,17 @@ export function createDirector({ seed, events }: DirectorOptions): Director {
     totalBatches: 0,
     dropsReleased: 0,
     remaining: 0,
-    timer: script.firstDropAt,
+    countdownSeconds: script.firstDropAt,
+    countdownWave: 1,
     spawnedSmall: 0,
     inFlightSmall: 0,
     plannedSmall: 0,
     bossPending: false,
     bossArrived: false,
     bossReleased: false,
+    gunshipPending: false,
+    gunshipArrived: false,
+    gunshipReleased: false,
   };
 
   /** The drop that is due next, or `undefined` once they are all out. */
@@ -252,10 +318,23 @@ export function createDirector({ seed, events }: DirectorOptions): Director {
     status.bossPending = !bossReleased && outcome === 'running';
     status.bossArrived = bossArrived;
     status.bossReleased = bossReleased;
-    // Derived from the clock rather than decremented, so it cannot drift from the times
-    // the drops are actually measured against.
-    const drop = phase === 'OPENING' || phase === 'DEPLOYING' ? pendingDrop() : undefined;
-    status.timer = drop ? Math.max(0, drop.at - elapsed) : 0;
+    status.gunshipPending = bossReleased && !gunshipReleased && outcome === 'running';
+    status.gunshipArrived = gunshipArrived;
+    status.gunshipReleased = gunshipReleased;
+
+    // Both countdowns are *derived* from the clock rather than decremented, so neither can
+    // drift from the times the beats are actually measured against.
+    if (phase === 'GUNSHIP_COUNTDOWN') {
+      status.countdownWave = 2;
+      status.countdownSeconds = Math.max(0, secondWaveAt + DIRECTOR.secondWaveCountdown - elapsed);
+    } else {
+      const drop = phase === 'OPENING' || phase === 'DEPLOYING' ? pendingDrop() : undefined;
+      // Wave 1 is the opening only. `DEPLOYING` still has a live timer (the next drop), but
+      // no countdown element: drops two through five are announced by their ground rings, and
+      // a clock at the top of the screen would stop meaning "brace yourself".
+      status.countdownWave = phase === 'OPENING' ? 1 : 0;
+      status.countdownSeconds = drop ? Math.max(0, drop.at - elapsed) : 0;
+    }
   };
 
   /**
@@ -304,12 +383,12 @@ export function createDirector({ seed, events }: DirectorOptions): Director {
       orderId: nextOrderId++,
       position: pickPoint(ctx, false),
       warning: DIRECTOR.spawnWarningDuration,
-      boss: false,
+      archetype: 'small',
     };
     inFlightSmall += 1;
     inFlightOrders.add(order.orderId);
     out.push(order);
-    events.spawnPending(order, 'small');
+    events.spawnPending(order);
   };
 
   /**
@@ -327,10 +406,31 @@ export function createDirector({ seed, events }: DirectorOptions): Director {
       orderId: nextOrderId++,
       position: pickPoint(ctx, true),
       warning: DIRECTOR.spawnWarningDuration,
-      boss: true,
+      archetype: 'large',
     };
     out.push(order);
-    events.spawnPending(order, 'large');
+    events.spawnPending(order);
+  };
+
+  /**
+   * Releases the second wave, once the countdown has run out.
+   *
+   * Guarded like the Warden's release, and for the same reason: "exactly one gunship per run"
+   * should be a property of this function rather than of the shape of the phase machine that
+   * calls it.
+   */
+  const releaseGunship = (ctx: DirectorContext, out: SpawnCommand[]): void => {
+    if (gunshipReleased) return;
+    gunshipReleased = true;
+    phase = 'GUNSHIP_INCOMING';
+    const order: SpawnCommand = {
+      orderId: nextOrderId++,
+      position: pickPoint(ctx, true),
+      warning: DIRECTOR.spawnWarningDuration,
+      archetype: 'helicopter',
+    };
+    out.push(order);
+    events.spawnPending(order);
   };
 
   return {
@@ -349,9 +449,9 @@ export function createDirector({ seed, events }: DirectorOptions): Director {
         events.assaultStarted(script);
       }
 
-      // Death ends the run from anywhere, including part-way through a drop. The phase
-      // guard is what the trap table asks for: `playerDead` *and* the phase, never either
-      // alone.
+      // Death ends the run from anywhere, including part-way through a drop or during the
+      // second wave's countdown. The phase guard is what the trap table asks for:
+      // `playerDead` *and* the phase, never either alone.
       if (ctx.playerDead) {
         if (phase !== 'DEFEAT' && phase !== 'VICTORY') enterDefeat();
         publishStatus();
@@ -406,7 +506,34 @@ export function createDirector({ seed, events }: DirectorOptions): Director {
         }
 
         case 'BOSS_ACTIVE': {
-          if (!ctx.bossAlive) enterWin();
+          if (!ctx.bossAlive) {
+            // The Warden is down. The run is **not** over: the second wave is announced here,
+            // on the same tick its body leaves the field, so the countdown the player reads
+            // is measured from the moment the fight actually ended.
+            secondWaveAt = elapsed;
+            phase = 'GUNSHIP_COUNTDOWN';
+            events.secondWave(DIRECTOR.secondWaveCountdown, 'helicopter');
+          }
+          break;
+        }
+
+        case 'GUNSHIP_COUNTDOWN': {
+          if (ctx.time >= secondWaveAt + DIRECTOR.secondWaveCountdown) releaseGunship(ctx, out);
+          break;
+        }
+
+        case 'GUNSHIP_INCOMING': {
+          // Same rule as the Warden's: a victory declared during the arrival warning would be
+          // a victory over an enemy whose body has not been built yet.
+          if (ctx.gunshipAlive) {
+            gunshipArrived = true;
+            phase = 'GUNSHIP_ACTIVE';
+          }
+          break;
+        }
+
+        case 'GUNSHIP_ACTIVE': {
+          if (!ctx.gunshipAlive) enterWin();
           break;
         }
 
@@ -434,6 +561,9 @@ export function createDirector({ seed, events }: DirectorOptions): Director {
       releasedSmall = 0;
       bossReleased = false;
       bossArrived = false;
+      gunshipReleased = false;
+      gunshipArrived = false;
+      secondWaveAt = 0;
       spawnedSmall = 0;
       inFlightSmall = 0;
       inFlightOrders.clear();
