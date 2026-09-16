@@ -586,6 +586,7 @@ function fakeHudElements(): HudElements {
     ammoState: fakeElement(),
     chargeCount: fakeElement(),
     spreadHint: fakeElement(),
+    countdown: fakeElement(),
     stats: fakeElement(),
     hint: fakeElement(),
     damageFlash: fakeElement(),
@@ -613,9 +614,11 @@ describe('HUD layer state', () => {
       metrics: { fps: 60, tps: 60, stepMs: 1, renderMs: 1, stepsLastFrame: 1, droppedStepFrames: 0 },
       bannerRemaining: 0,
       enemiesAlive: 0,
+      enemiesRemaining: 30,
+      countdownSeconds: 0,
       dead: false,
-      wave: 1,
-      totalWaves: 8,
+      batch: 1,
+      totalBatches: 5,
       seed: 1,
       ...overrides,
     };
@@ -638,6 +641,32 @@ describe('HUD layer state', () => {
 
     hud.update(hudView({ adsProgress: 0 }));
     expect(elements.crosshair.classList.contains('ads')).toBe(false);
+  });
+
+  it('shows the opening countdown on screen exactly while there is one', () => {
+    // The wiring test for the one piece of phase 10 the player reads: a number that has to
+    // appear, change, and *disappear* at the right moments. `countdownText` is pinned in
+    // `hud.test.ts`; what is pinned here is that the element actually carries it.
+    const elements = fakeHudElements();
+    const hud = createHud(elements);
+
+    // `0` means "nothing to count down", so the element is taken off screen. (Its *initial*
+    // state is the markup's — `#countdown hidden` in `index.html`, pinned by
+    // `shell.test.ts` — because the HUD only writes on a change.)
+    hud.update(hudView({ countdownSeconds: 0 }));
+    expect(elements.countdown.hidden).toBe(false);
+
+    hud.update(hudView({ countdownSeconds: 10 }));
+    expect(elements.countdown.hidden).toBe(false);
+    expect(elements.countdown.textContent).toBe('第一批敌人还有 10 秒到达战场');
+
+    // It follows the number rather than being written once.
+    hud.update(hudView({ countdownSeconds: 4.2 }));
+    expect(elements.countdown.textContent).toBe('第一批敌人还有 5 秒到达战场');
+
+    // And it goes away when the drops start — the element must not linger at "1".
+    hud.update(hudView({ countdownSeconds: 0 }));
+    expect(elements.countdown.hidden).toBe(true);
   });
 
   it('ships each overlay and the HUD as exact opposites, in both directions', () => {

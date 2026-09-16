@@ -937,14 +937,6 @@ describe('store hygiene', () => {
     expect(second.alive).toBe(true);
   });
 
-  it('scales spawn health and never below one point', () => {
-    const h = harness();
-    const doubled = h.store.spawn('small', vec3(0, 0, -10), { healthScale: 2 });
-    expect(doubled.health).toBe(ENEMY_SMALL.maxHealth * 2);
-    const zeroed = h.store.spawn('small', vec3(2, 0, -10), { healthScale: 0 });
-    expect(zeroed.health).toBe(1);
-  });
-
   it('counts only live combatants in liveCount', () => {
     const h = harness(emptyWorld(), 2);
     expect(h.store.liveCount()).toBe(0);

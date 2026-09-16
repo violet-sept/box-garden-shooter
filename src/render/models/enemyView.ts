@@ -152,7 +152,7 @@ export function createEnemyView(): EnemyView {
   const acquire = (kind: EnemyArchetypeId): BodySlot => {
     // Claim an on-screen slot of this kind that nothing has claimed yet this frame.
     // A slot still playing out its collapse is fair game: taking it back is what stops
-    // a wave from allocating a body per death while the old ones are still on the
+    // a drop from allocating a body per death while the old ones are still on the
     // ground.
     //
     // The check is `claimed`, not `deadSince !== null`. `deadSince` answers "is this

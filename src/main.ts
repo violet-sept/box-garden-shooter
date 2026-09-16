@@ -185,6 +185,7 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
     ammoState: requireElement('ammo-state'),
     chargeCount: requireElement('charge-count'),
     spreadHint: requireElement('spread-hint'),
+    countdown: requireElement('countdown'),
     stats: statsElement,
     hint: bootCta,
     damageFlash: requireElement('damage-flash'),
@@ -537,6 +538,10 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
 
       renderer.render(scene, camera);
 
+      // One read of the director's status per frame: `status` republishes the snapshot on
+      // every access, and the countdown, the batch number and the remaining count all come
+      // out of the same one.
+      const director = world.director.status;
       hud.update({
         weapon: world.player.weapon,
         health: world.player.health,
@@ -551,9 +556,14 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
         metrics: loop.getMetrics(),
         bannerRemaining: 0,
         enemiesAlive: world.enemies.liveCount(),
+        enemiesRemaining: director.remaining,
+        // The opening countdown only. From the first drop onwards the field is announcing
+        // itself with ground rings, and a permanent clock at the top of the screen would
+        // stop meaning "brace yourself".
+        countdownSeconds: director.phase === 'OPENING' ? director.timer : 0,
         dead: world.player.dead,
-        wave: world.director.status.wave,
-        totalWaves: world.director.status.totalWaves,
+        batch: director.batch,
+        totalBatches: director.totalBatches,
         seed: world.seed,
       });
 
@@ -601,7 +611,7 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
   const veilMessageFor = (mode: 'boot' | 'result'): { title: string; detail: string; cta: string } => {
     switch (mode) {
       case 'boot':
-        return { title: '箱庭射击', detail: '点击画面开始 · Esc 暂停', cta: '点击画面开始（Esc 暂停）' };
+        return { title: 'DARKSHOOTER', detail: '点击画面开始 · Esc 暂停', cta: '点击画面开始（Esc 暂停）' };
       case 'result':
         return { title: results.title, detail: results.detail, cta: '点击画面重开一局' };
     }
@@ -624,8 +634,14 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
     hud.showVeil(message.title, message.detail);
   };
 
-  /** The results screen's text, filled in by the run-ending events. */
-  const results = { title: '箱庭射击', detail: '' };
+  /**
+   * The results screen's text, filled in by the run-ending events.
+   *
+   * The title starts as the product name rather than as `胜利`, because `results` is only
+   * ever *read* on the `result` veil: a run that has not ended has no result to show, and
+   * "DARKSHOOTER" is the honest placeholder for the frame in which one is being built.
+   */
+  const results = { title: 'DARKSHOOTER', detail: '' };
 
   // --- Input ----------------------------------------------------------------
   const input = new InputState(
@@ -734,7 +750,7 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
     // with a corpse standing in the arena.
     character?.reset(world.player.yaw);
     runOver = false;
-    results.title = '箱庭射击';
+    results.title = 'DARKSHOOTER';
     results.detail = '';
     lastRenderMs = 0;
     loop.resetClock();
@@ -770,7 +786,7 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
    * The banner is not decoration. Without it a `V` press in third person changes the picture in a
    * way the player may read as a camera glitch, and in first person the body simply disappears —
    * the one case where the feature's own feedback is *absence*. A transient label names the state
-   * the player is now in, which is the same reason the wave banners exist.
+   * the player is now in, which is the same reason the run-beat banners exist.
    */
   function toggleViewMode(): void {
     const mode = world.toggleView();
@@ -821,7 +837,7 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
     hud.flashDamage(payload.amount / Math.max(1, world.player.maxHealth));
   });
 
-  // --- Blasts and wave feedback ---------------------------------------------
+  // --- Blasts and run feedback -----------------------------------------------
   // The shell is drawn from the event rather than from the item pool: the pool slot is
   // already recycled by the time the renderer sees it, and the blast's *position* is
   // the one thing the picture and the damage have to agree on.
@@ -829,16 +845,20 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
     effects.explode(payload.position, payload.radius);
   });
 
-  // A wave change is the run's beat, so it gets a banner. The numbers come from the
-  // simulation's own counter, never from a private tally here.
-  events.on('wave:started', (payload) => {
-    hud.banner(payload.breathing ? `第 ${payload.wave} 波 · 喘息` : `第 ${payload.wave} 波`, payload.breathing ? 'good' : 'neutral');
+  /**
+   * The run's beats.
+   *
+   * `assault:started` deliberately gets **no** banner: the countdown element is already
+   * on screen saying "the first drop is ten seconds away", and a banner on top of it would
+   * be the same sentence twice. The old `wave:started` banner existed because a wave
+   * arriving was news; here it would be noise.
+   */
+  events.on('field:cleared', () => {
+    hud.banner('场上已清空 · 典狱长即将登场', 'good');
   });
 
-  events.on('boss:spawned', (payload) => {
-    // The one event with a `reason`: a release because the field was cleared is a
-    // reward and reads differently from one the clock forced, so the banner says which.
-    hud.banner(payload.reason === 'cleared' ? '典狱长登场 · 场上已清空' : '典狱长登场', 'warn');
+  events.on('boss:spawned', () => {
+    hud.banner('典狱长登场', 'warn');
   });
 
   events.on('boss:died', () => {
@@ -870,11 +890,11 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
   };
 
   events.on('run:victory', (payload) => {
-    endRun('胜利', `${payload.waves} 波全部清空 · 用时 ${elapsedLabel(payload.elapsed)} · 种子已记录在 F3`);
+    endRun('胜利', `全部清空 · 用时 ${elapsedLabel(payload.elapsed)} · 种子已记录在 F3`);
   });
 
   events.on('run:defeat', (payload) => {
-    endRun('阵亡', `倒在第 ${payload.wave} 波 · 坚持了 ${elapsedLabel(payload.elapsed)}`);
+    endRun('阵亡', `坚持了 ${elapsedLabel(payload.elapsed)}`);
   });
 
   // --- Resize ---------------------------------------------------------------
@@ -907,6 +927,23 @@ export function bootGame(canvas: HTMLCanvasElement): BootedGame {
       runOver = false;
       lastRenderMs = 0;
       loop.resetClock();
+      /**
+       * **The run is paused until the player takes control.**
+       *
+       * Until phase 10 the loop started unpaused behind the title screen, so the
+       * simulation ran while the player read the veil: the run's clock was already
+       * seconds old at the first tick of play, and the opening grace period — six
+       * seconds of "how big is this place, how does the gun feel" — was spent on a
+       * screen nobody was playing. With a ten-second countdown and a scripted first
+       * drop, that stops being cosmetic: the countdown would be *partly or wholly
+       * consumed* before the first frame of the actual run, and enemies could be
+       * standing in the arena behind an opaque veil.
+       *
+       * The loop keeps *rendering* while paused (that is what draws the frozen scene
+       * behind the pause panel), so nothing about the title screen changes except that
+       * the world stops until a click unlocks the pointer.
+       */
+      loop.setPaused(true);
       loop.start();
     },
 

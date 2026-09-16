@@ -4,8 +4,9 @@
  * ## Why this file has to exist
  *
  * Two of the phase-4 acceptance targets — "120 entities at 60 FPS" and "a simulation
- * tick at or under 2 ms" — could not be measured at all before this: the director's
- * concurrency cap is 18, and the phase-3 debug formation was deleted wholesale.
+ * tick at or under 2 ms" — could not be measured at all before this: the run's own
+ * script is thirty bodies (and it was eighteen under the old concurrency cap), and the
+ * phase-3 debug formation was deleted wholesale.
  * The instruments were already there (`LoopMetrics` computes `fps` / `tps` /
  * `stepMs` / `renderMs`, and the F3 panel displays them); what was missing was a
  * road that could reach 120 bodies.

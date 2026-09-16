@@ -30,8 +30,8 @@ export type EnemyKind = EnemyArchetypeId | 'dummy';
  * Small enemy states.
  *
  * `SPAWN` is a real state rather than an instant: an enemy that appears and
- * charges on the same tick gives the player no chance to register it, and the wave
- * director (phase 3) will want a materialisation beat it can drive.
+ * charges on the same tick gives the player no chance to register it, and the
+ * director (phase 3) drives a materialisation beat with it.
  */
 export type SmallState =
   | 'SPAWN'

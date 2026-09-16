@@ -433,7 +433,7 @@ describe('explosion: the splash, through the real store', () => {
       radius: ITEMS.blastRadius,
       damage: ITEMS.blastDamage,
     });
-    // 130 against 60 HP, and about 102 against 2400: the two archetypes have to read
+    // 130 against 60 HP, and about 102 against 4800: the two archetypes have to read
     // completely differently to the same item, or the throw has no target priority.
     expect(stalker.alive).toBe(false);
     expect(warden.alive).toBe(true);

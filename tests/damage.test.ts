@@ -196,14 +196,32 @@ describe('hitstop weights', () => {
 });
 
 describe('large enemy balance arithmetic', () => {
-  it('needs roughly two magazines of body shots to kill a Warden', () => {
-    const perShot = WEAPON.damage;
-    const shotsNeeded = Math.ceil(ENEMY_LARGE.maxHealth / perShot);
-    const magazines = shotsNeeded / WEAPON.magazineSize;
-    // The plan's design intent is "鈮? magazines", and the acceptance criterion is
-    // that killing it requires at least one deliberate reload.
-    expect(magazines).toBeGreaterThan(1);
-    expect(magazines).toBeLessThan(4.5);
+  it('cannot be killed by body fire out of the rounds a run has left after the Stalkers', () => {
+    // Phase 10 doubled the Warden from 2400 to 4800. The old assertion here ("about two
+    // magazines of body shots") described the 2400 build and would now be a lie, so what
+    // replaced it is the fact the doubling actually created — and it is a fact about the
+    // *run*, not about one enemy, because the Stalkers are paid for out of the same pool:
+    const carried = WEAPON.magazineSize + WEAPON.reserveAmmo;
+    const bodyShots = Math.ceil(ENEMY_LARGE.maxHealth / WEAPON.damage);
+    const stalkers = 30 * Math.ceil(ENEMY_SMALL.maxHealth / WEAPON.damage);
+    // 219 + 90 = 309 rounds against 240 carried, before falloff (which only makes it
+    // worse: the Warden holds an 18-26 m band and `falloffStart` is 22 m).
+    expect(bodyShots + stalkers).toBeGreaterThan(carried);
+    // The Warden alone already eats almost the whole pool.
+    expect(bodyShots).toBeGreaterThan(carried * 0.9);
+    // It still needs several deliberate reloads, which was the original design intent.
+    expect(bodyShots / WEAPON.magazineSize).toBeGreaterThan(4.5);
+  });
+
+  it('is killable with weak-point fire inside the rounds a run carries', () => {
+    // The flip side, and the reason the doubling is a difficulty step rather than an
+    // impossible wall: 137 weak-point rounds for the Warden plus one per Stalker fits in
+    // the 240 a run carries.
+    const carried = WEAPON.magazineSize + WEAPON.reserveAmmo;
+    const headShots = Math.ceil(ENEMY_LARGE.maxHealth / (WEAPON.damage * ENEMY_LARGE.headshotMultiplier));
+    expect(headShots + 30).toBeLessThan(carried);
+    // With little enough room that it is a real demand on the player's aim, not a formality.
+    expect(headShots).toBeGreaterThan(WEAPON.magazineSize * 4);
   });
 
   it('gives the Warden a much longer telegraph than the Stalker', () => {

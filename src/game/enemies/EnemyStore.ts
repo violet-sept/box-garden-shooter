@@ -19,8 +19,8 @@
  *     to appear.
  *
  * Allocation discipline: entries are pooled per archetype and recycled, because a
- * director that spawns forty enemies a wave must not produce forty garbage
- * objects a wave.
+ * script that releases ten enemies in a single tick must not allocate ten bodies per
+ * drop for the whole run.
  *
  * ## Tick order inside `tick`
  *
@@ -138,8 +138,6 @@ export interface EnemyContext {
 
 /** Optional overrides when spawning. */
 export interface SpawnOptions {
-  /** Wave health scaling from the director (phase 3). Defaults to 1. */
-  readonly healthScale?: number;
   /** Starting state. Defaults to `SPAWN`. */
   readonly state?: 'SPAWN' | 'IDLE';
 }
@@ -182,7 +180,7 @@ export interface EnemyStore {
   applyBlast(request: BlastRequest): number;
 
   aliveCount(): number;
-  /** Live combatants only: practice dummies are excluded from wave bookkeeping. */
+  /** Live combatants only: practice dummies are excluded from the run's bookkeeping. */
   liveCount(kind?: EnemyKind): number;
   damagedCount(): number;
   reset(): void;
@@ -195,10 +193,9 @@ interface DummyRecord {
   /**
    * The dummy's own maximum health, captured at construction.
    *
-   * Kept separately because `enemy.stats` is per-body and is rewritten on every spawn
-   * (the wave's health scale has to land somewhere the HUD and the damage numbers can
-   * read it). Reading the maximum back off the state after a wave had scaled it would
-   * make a reset restore the wrong number.
+   * Kept separately because a dummy can be shot (it is a live body in the store) and its
+   * health is restored on `reset()`; reading the maximum back off `enemy.stats` would be
+   * reading a value the damage path has already written to.
    */
   readonly maxHealth: number;
 }
@@ -209,18 +206,17 @@ type Pool = Map<EnemyKind, EnemyState[]>;
 /**
  * Creates the stat block for one spawned body.
  *
- * A **copy** per body, with the wave's health scale baked in, rather than the shared
- * archetype object. `stats.maxHealth` is what the damage numbers, the HUD and the
- * debug panel read, and it is also what `applyDamage` compares against for the enrage
- * threshold and the hitstun fraction — so a body whose true maximum was scaled but
- * whose `stats` still reported the base number would show the wrong denominator
- * everywhere while behaving correctly in the one place nobody looks.
+ * A **copy** per body rather than the shared archetype object: `enemy.stats` is `readonly`
+ * on the state, the HUD and the damage numbers read it, and the render layer may hold a
+ * reference to it — so one body must never be able to alias the table. The pool keeps the
+ * copy, so a recycled body reuses its object.
  *
- * The copy is cheap: it happens once per spawn, and there are at most a couple of
- * dozen bodies alive. The pool keeps it, so a recycled body reuses its object.
+ * There used to be a `healthScale` parameter here, for the phase-3 wave curve's per-wave
+ * health ramp. Phase 10's script gives every Stalker in a run the same numbers, so the
+ * scale became a parameter that could only ever be 1 and was deleted along with the curve.
  */
-function scaledStats(base: EnemyStats, healthScale: number): EnemyStats {
-  return healthScale === 1 ? { ...base } : { ...base, maxHealth: Math.max(1, base.maxHealth * healthScale) };
+function bodyStats(base: EnemyStats): EnemyStats {
+  return { ...base };
 }
 
 function makeEnemy(id: number, kind: EnemyKind, stats: EnemyStats): EnemyState {
@@ -719,8 +715,7 @@ export function createEnemyStore(dummySpecs: readonly TargetSpec[], events: Even
     },
 
     spawn(archetype, position, options) {
-      const scale = Math.max(0, options?.healthScale ?? 1);
-      const stats = scaledStats(statsFor(archetype), scale);
+      const stats = bodyStats(statsFor(archetype));
       const free = pool.get(archetype);
       const pooled = free && free.length > 0 ? free.pop() : undefined;
       // A recycled entry keeps its id. Pooling preserving identity is what lets a

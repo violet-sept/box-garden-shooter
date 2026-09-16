@@ -484,17 +484,33 @@ export const ENEMY_SMALL: EnemyStats = {
 };
 
 /**
- * Large enemy: slow, armoured, ranged/area attacks. Appears only after the
- * small wave is cleared or the wave timer expires.
- * Designed to survive 3.7 magazines of body fire (110 rounds) or 2.3 magazines
- * of weak-point fire (69 rounds), so the kill always needs a reload the player
- * chose; and to kill an unwary player in 5 shot hits (150 / 34).
+ * Large enemy: slow, armoured, one straight yellow line.
+ *
+ * **Released only once the field is clear** (phase 10): the run has exactly one
+ * Warden, it arrives after the last Stalker dies, and nothing shares the field with
+ * it. There is no timeout backstop any more — see {@link DIRECTOR}.
+ *
+ * ## Why 4800, and what it costs
+ *
+ * Phase 10 doubled it (2400 → 4800) on request. Read the result as a cost, because a
+ * doubling of a 110-round figure is not a rounding change:
+ *
+ *   - body fire: 4800 / 22 = **219 rounds**, and a run carries 240 in total (30 in the
+ *     magazine, 210 in reserve) — of which the 30 Stalkers already cost roughly 90;
+ *   - weak-point fire: 4800 / (22 × 1.6) = **137 rounds**.
+ *
+ * So the Warden is now a weak-point fight: a player who only ever hits the torso runs
+ * out of ammunition before it dies. That is a deliberate difficulty step, it is
+ * **unverified** (nobody has played it), and the knob that opens it back up is
+ * `WEAPON.reserveAmmo` rather than this number.
+ *
+ * It still kills an unwary player in 5 shots (150 / 34).
  */
 export const ENEMY_LARGE: EnemyStats = {
   id: 'large',
   displayName: 'Warden',
 
-  maxHealth: 2400,
+  maxHealth: 4800,
   moveSpeed: 1.9,
   attackMoveSpeed: 0.8,
   acceleration: 8,
@@ -561,7 +577,7 @@ export const ENEMY = {
 
   /**
    * Hitstun applied when a hit exceeds `stunDamageThreshold` of the victim's max
-   * health. Small enemies feel it; the Warden's 2400 HP means a rifle round never
+   * health. Small enemies feel it; the Warden's 4800 HP means a rifle round never
    * reaches it, which is exactly the intended contrast.
    */
   stunDuration: 0.22,
@@ -647,83 +663,64 @@ export const PLAYER_HURTBOX_RADIUS = 0.42;
 
 
 /**
- * Wave director tuning.
+ * The run's script: what arrives, when, and in what order.
  *
- * A wave is: `smallCount` small enemies spawn over `spawnInterval`; the large
- * enemy is released when the small enemies are all dead OR `bossTimer` seconds
- * have elapsed since the wave started, whichever happens first.
+ * ## Why a fixed script rather than a curve (phase 10)
  *
- * ## The shape of a run (decision D13, technical plan section 6.3)
+ * Phase 3 shipped a parameterised wave curve — eight waves, each planning more small
+ * enemies, a shorter release interval, a decaying backstop timer, every third wave a
+ * "breathing" lull, and ±12% jitter on the count. Phase 10 replaced all of it with a
+ * script the player can learn: **30 small enemies in five drops of 5/5/5/5/10, ten
+ * seconds apart, then one Warden.**
  *
- * `totalWaves` waves, then the run ends. Every `breathingWaveEvery`-th wave is a
- * *breathing wave*: fewer small enemies, a longer pause before the next one and
- * the only place charges are topped up. That gives the run a pulse instead of a
- * monotonic ramp, and it is what keeps items scarce — handing one out per wave
- * (the original guess) meant a full belt by wave 3 and no decisions left to make
- * with them.
+ * Every consequence below is deliberate rather than incidental:
  *
- * Paper estimate for the 8-wave shape: ~8 minutes if every wave is cleared early
- * and ~13.5 if every wave runs to its boss timer, which is the 10-15 minute target.
- * That estimate is *not* acceptance evidence — see section 4.5 of `docs/阶段3.md`.
+ *   - **There is no timeout backstop.** The Warden is released when the field is clear
+ *     and at no other moment, so a player who never kills the last Stalker never meets
+ *     it. The old curve needed a timer because a wave had to be able to end; here the
+ *     run simply waits, and the wait *is* the pressure.
+ *   - **Nothing tricks in while the Warden is alive.** The small-enemy total is this
+ *     script's sum, so the boss fight is the only thing on the field.
+ *   - **The concurrency cap is gone with the curve.** `maxConcurrentSmall = 14` bounded
+ *     *pressure* under a plan that could ask for 40 enemies; a script that releases five
+ *     at a time and thirty in total is bounded by its own sum, which is the stronger
+ *     guarantee. Left in place it could only ever be wrong — a 14-body cap silently
+ *     clips the third drop.
+ *   - **Per-wave health scaling is gone too**, for the same reason: every Stalker in a
+ *     run is now the same Stalker, so a scale factor would be a constant pretending to
+ *     be a curve.
+ *
+ * The director's random stream survives for exactly one job: *where* a body appears.
+ * Two runs from two seeds fight the same schedule on differently-arranged ground.
  */
 export const DIRECTOR = {
   /**
-   * Seconds of quiet before the first wave.
+   * Seconds from the run's first tick to the first drop.
    *
-   * Short on purpose. The brief's curve asks for a half-minute of "how big is this
-   * place, how does the gun feel", but an empty arena with a clock is not what
-   * teaches that — moving does. Six seconds is one lap of the spawn area, and the
-   * intermission and breathing-wave gaps are where the exploring actually happens.
+   * This is also the opening countdown the HUD shows ("第一批敌人还有 N 秒到达战场"),
+   * and it is the reason the run is **paused behind the title veil**: a clock that
+   * started at page load rather than at "the player took control" would spend this
+   * window on nobody.
    */
-  openingGracePeriod: 6,
-  /** Seconds of quiet between waves. */
-  interWaveDelay: 8,
-  /** Extra seconds added to the intermission after a breathing wave, for recovery. */
-  breathingWaveExtraDelay: 6,
-
-  /** Waves in one run. Reaching the end of them kills the run (win or lose). */
-  totalWaves: 8,
-  /** Every Nth wave is a breathing wave. Must be >= 2 to mean anything. */
-  breathingWaveEvery: 3,
-  /** Fraction of `smallCount` a breathing wave keeps. */
-  breathingWaveCountScale: 0.45,
-
-  /** Enemies a wave may have alive at once, caps spawn pressure. */
-  maxConcurrentSmall: 14,
-  /** Absolute cap on live enemies including the large one. */
-  maxConcurrentTotal: 18,
-
-  /** Seconds between individual small-enemy spawns. */
-  spawnInterval: 0.7,
-  /** Spawn interval shrinks by this factor each wave, floored. */
-  spawnIntervalDecay: 0.96,
-  spawnIntervalMin: 0.22,
-
-  /** Small enemy count per wave: base + growth * wave, capped. */
-  smallCountBase: 6,
-  smallCountGrowth: 2.4,
-  smallCountMax: 40,
+  openingCountdown: 10,
   /**
-   * Per-wave randomisation of `smallCount`, as a fraction.
+   * Seconds between drops, counted from the **start of the run** rather than from the
+   * previous drop.
    *
-   * The curve is deterministic and the *exact* count per wave is not, so two seeds
-   * give two runs that feel the same shape without being the same wave. Zero would
-   * make the run a fixed script; the tests pin the curve with this set to 0.
+   * Absolute times mean neither a long frame nor a hitstop can make the schedule drift:
+   * drop *i* happens at `openingCountdown + batchInterval * i`, whatever happened in
+   * between.
    */
-  smallCountJitter: 0.12,
-  /** Small enemy HP scales by this factor each wave. */
-  smallHealthScalePerWave: 1.12,
-
-  /** Seconds before the large enemy is force-spawned if smalls remain. */
-  bossTimerBase: 75,
-  bossTimerDecay: 0.97,
-  bossTimerMin: 40,
-  /** If the large enemy is alive, small enemies keep trickling at this interval. */
-  addsWhileBossAlive: true,
-  /** Seconds between reinforcement trickles while the large enemy is alive. */
-  addsIntervalWhileBossAlive: 5.5,
-  /** Reinforcements released per trickle. */
-  addsPerTrickle: 2,
+  batchInterval: 10,
+  /**
+   * Small enemies per drop, in release order.
+   *
+   * The run's total is the sum of this list (5 + 5 + 5 + 5 + 10 = 30), and that sum is
+   * the single source for "how many Stalkers a run contains", "how many the director may
+   * have in flight" and the ceiling the world's release queue enforces. Adding a batch or
+   * changing a count therefore moves all three at once, which is the point.
+   */
+  batchSizes: [5, 5, 5, 5, 10],
 
   /** Minimum distance a spawn point must keep from the player. */
   minSpawnDistanceFromPlayer: 12,
@@ -785,22 +782,24 @@ export const DIRECTOR = {
 /**
  * A mutable view of {@link DIRECTOR}.
  *
- * The table is declared `as const` so its values are narrow literal types where they
- * are read, but the curve, spawn and director tests need to pin individual knobs —
- * the count jitter, the distance band, the wave count — to assert the rules they
- * encode. Exporting a mutable alias is cheaper, and much less surprising, than
- * casting at every call site, and it keeps the numbers in one place. Nothing in
- * `src/` writes through it.
+ * The table is a plain `const` object — deliberately **not** `as const`, so its arrays
+ * are real arrays — and this alias is the plainly-typed handle the script and spawn
+ * tests read and pin: the batch list, the interval, the distance band. (The previous
+ * revision of this comment claimed the table was `as const`; it never was.)
+ * Nothing in `src/` writes through it.
+ *
+ * `batchSizes` is typed as a readonly array here even though the table's own value is
+ * mutable, so a test has to replace the whole list (`DIRECTOR_TUNING.batchSizes = [1, 2]`)
+ * rather than poking one element and leaving the invariant `sum === the run's total`
+ * unstated.
  */
 export const DIRECTOR_TUNING: {
-  smallCountJitter: number;
+  openingCountdown: number;
+  batchInterval: number;
+  batchSizes: readonly number[];
   minSpawnDistanceFromPlayer: number;
   maxSpawnDistanceFromPlayer: number;
   minSpawnSeparation: number;
-  totalWaves: number;
-  openingGracePeriod: number;
-  interWaveDelay: number;
-  bossTimerBase: number;
 } = DIRECTOR;
 
 
@@ -908,8 +907,16 @@ export const ITEMS = {
   throwCooldown: 1.2,
   /** Number of charges the player starts a run with. */
   startingCharges: 3,
-  /** Charges granted per wave cleared. */
-  chargesPerWaveCleared: 1,
+  /**
+   * Charges granted when the field is cleared — the run's **one** top-up beat.
+   *
+   * Phase 10 folded the old two-number reward table (`DIRECTOR_REWARDS`, which paid
+   * nothing for an ordinary wave and one charge for a breathing one) into this single
+   * value: the script has exactly one "the field is clear" moment per run, so two names
+   * for one number was two chances for them to disagree. It is still 1, which is what a
+   * breathing wave used to pay — so the belt's economy is unchanged, it just happens once.
+   */
+  chargesPerClear: 1,
   /** Maximum held charges. */
   maxCharges: 5,
 
@@ -931,27 +938,6 @@ export const ITEMS = {
 
   /** Seconds before an unexploded item despawns. */
   maxLifetime: 3.5,
-} as const;
-
-/**
- * Charges granted when a wave is cleared (decision D13).
- *
- * Kept next to {@link ITEMS} rather than inside {@link DIRECTOR} so the reward has
- * one home: the item table owns how many the player holds, and this owns when the
- * belt is topped up.
- */
-export const DIRECTOR_REWARDS = {
-  /**
-   * Charges granted for clearing an ordinary wave.
-   *
-   * Zero, by decision D13. The original guess was one per wave, which with
-   * `maxCharges = 5` means a full belt by wave 3 and no decision left to make
-   * about when to spend them. Topping up only on breathing waves keeps the throw
-   * a resource.
-   */
-  chargesPerWaveCleared: 0,
-  /** Charges granted for clearing a breathing wave. */
-  chargesPerBreathingWave: ITEMS.chargesPerWaveCleared,
 } as const;
 
 /** Renderer and camera tuning that designers may want to touch. */
@@ -1051,7 +1037,7 @@ export const RENDER_TUNING: {
  * Performance-scene knobs (phase 4, technical plan section 5.10.2).
  *
  * "120 entities at 60 FPS" could not be measured at all before this existed: the
- * director's concurrency cap is 18 and the debug formation was deleted in phase 3,
+ * run's whole script is thirty bodies and the debug formation was deleted in phase 3,
  * so nothing in the game could put more than a couple of dozen bodies on the field.
  * The entity count lives here rather than inside `tools/desktop-acceptance.mjs`
  * because a number written into the acceptance script and a different number in the
@@ -1250,8 +1236,8 @@ export type SoundId =
   | 'reloadFinished'
   | 'itemThrown'
   | 'itemExploded'
-  | 'waveStarted'
-  | 'waveCleared'
+  | 'assaultStarted'
+  | 'fieldCleared'
   | 'bossSpawned'
   | 'runVictory'
   | 'runDefeat';
@@ -1571,7 +1557,14 @@ export const SOUND_SPECS: Readonly<Record<SoundId, SoundSpec>> = {
   },
 
   // --- Run beats ------------------------------------------------------------
-  waveStarted: {
+  /**
+   * "The run has started and the first drop is on its way."
+   *
+   * Fired once, on the first tick, alongside the on-screen countdown. It used to be
+   * `waveStarted` and fire once per wave; the script has one opening, so one name and
+   * one firing.
+   */
+  assaultStarted: {
     bus: 'uiStinger',
     gain: 0.5,
     priority: 60,
@@ -1585,7 +1578,8 @@ export const SOUND_SPECS: Readonly<Record<SoundId, SoundSpec>> = {
     lowpass: 5000,
     noiseSeed: 0x1a2b3c,
   },
-  waveCleared: {
+  /** "The field is clear." The beat before the Warden is released. */
+  fieldCleared: {
     bus: 'uiStinger',
     gain: 0.5,
     priority: 60,

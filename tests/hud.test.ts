@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   chargesEmpty,
+  countdownText,
   crosshairAiming,
   crosshairRadius,
   formatAmmo,
@@ -19,7 +20,7 @@ import {
   type OverlayMode,
 } from '#/render/hud/hud';
 import { CHANNEL_TOLERANCE_FRAMES, createHitLog } from '#/debug/hitlog';
-import { CROSSHAIR, PLAYER, SIM, WEAPON } from '#/core/config';
+import { CROSSHAIR, DIRECTOR, PLAYER, SIM, WEAPON } from '#/core/config';
 import { createWeaponState } from '#/game/player/weapon';
 import type { GameEvents } from '#/core/events';
 
@@ -35,6 +36,32 @@ describe('HUD formatting', () => {
     expect(healthTone(1)).toBe(healthTone(0.7));
     expect(healthTone(0.7)).not.toBe(healthTone(0.4));
     expect(healthTone(0.4)).not.toBe(healthTone(0.1));
+  });
+
+  it('writes the opening countdown as a live number, never as a zero', () => {
+    // The brief's line, with "十秒" replaced by the real countdown — so the whole
+    // assertion is "does the number track the seconds, and does it stop at 1".
+    expect(countdownText(DIRECTOR.openingCountdown)).toBe('第一批敌人还有 10 秒到达战场');
+    expect(countdownText(9.4)).toBe('第一批敌人还有 10 秒到达战场');
+    expect(countdownText(8.2)).toBe('第一批敌人还有 9 秒到达战场');
+    expect(countdownText(1)).toBe('第一批敌人还有 1 秒到达战场');
+    // A countdown that reads "还有 0 秒" is a lie about the drops, and the element is
+    // hidden at zero anyway — the floor is what keeps the two facts consistent.
+    expect(countdownText(0)).toBe('第一批敌人还有 1 秒到达战场');
+    expect(countdownText(0.01)).toBe('第一批敌人还有 1 秒到达战场');
+    expect(countdownText(-3)).toBe('第一批敌人还有 1 秒到达战场');
+  });
+
+  it('counts the opening down second by second, monotonically', () => {
+    const seen: string[] = [];
+    for (let remaining = DIRECTOR.openingCountdown; remaining > 0; remaining -= 1 / 60) {
+      const line = countdownText(remaining);
+      if (line !== seen[seen.length - 1]) seen.push(line);
+    }
+    // Ten distinct lines for ten seconds, in descending order: 10, 9, … 1.
+    expect(seen).toHaveLength(DIRECTOR.openingCountdown);
+    expect(seen[0]).toBe(countdownText(DIRECTOR.openingCountdown));
+    expect(seen[seen.length - 1]).toBe(countdownText(1 / 60));
   });
 
   it('reports an empty magazine and a reload distinctly', () => {

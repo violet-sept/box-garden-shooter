@@ -147,10 +147,10 @@ export function soundRequestsForAny(
     case 'item:exploded':
       return only('itemExploded');
 
-    case 'wave:started':
-      return only('waveStarted');
-    case 'wave:cleared':
-      return only('waveCleared');
+    case 'assault:started':
+      return only('assaultStarted');
+    case 'field:cleared':
+      return only('fieldCleared');
     case 'boss:spawned':
       return only('bossSpawned');
 

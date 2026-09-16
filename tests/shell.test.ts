@@ -72,6 +72,20 @@ describe('boot veil', () => {
     expect(main).toContain("window.addEventListener('unhandledrejection'");
     expect(main).toContain('浏览器拒绝了鼠标锁定');
   });
+
+  it('ships the opening countdown as hidden markup the HUD can fill', () => {
+    const html = read('index.html');
+    // Static, and hidden: the text is a live number, so an empty element that shipped
+    // visible would be a bordered panel with nothing in it on the title screen. The HUD
+    // writes the text only on a change (see `createHud`), which is also why the initial
+    // state has to come from the markup.
+    expect(html).toMatch(/id="countdown"[^>]*hidden/);
+    expect(read('src/main.ts')).toContain("countdown: requireElement('countdown')");
+    // The phrase the player reads is built by the HUD, not written into the markup — it
+    // carries a number that changes ten times in ten seconds, so the element ships empty.
+    expect(html).toMatch(/<div id="countdown"[^>]*><\/div>/);
+    expect(read('src/render/hud/hud.ts')).toContain('第一批敌人还有');
+  });
 });
 
 describe('pause menu', () => {

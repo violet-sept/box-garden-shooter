@@ -271,7 +271,7 @@ export function createEffects({ scene, numberLayer, seed = seedFromString('fx') 
 
   // --- Blast shells ---------------------------------------------------------
   // One expanding, fading sphere per detonation. Pooled and round-robin, like the
-  // decals: a wave can produce several explosions within a second and none of them may
+  // decals: a fight can produce several explosions within a second and none of them may
   // allocate. Additive and depth-write-free so the shell never occludes the bodies
   // inside it — the blast is a readout of where the damage was, not a wall.
   const blastShells: { mesh: Mesh; material: MeshBasicMaterial; life: number }[] = [];

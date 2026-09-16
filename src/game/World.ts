@@ -23,11 +23,11 @@
  *     killed by a blast has to go back to the pool through the same path as one
  *     killed by a bullet.
  *   - The director runs **after** cleanup, because `liveCount()` must not include
- *     the corpses this tick is about to recycle — otherwise the "wave cleared"
- *     test and the concurrency cap are both a tick stale.
+ *     the corpses this tick is about to recycle — otherwise the "field is clear"
+ *     test and the release queue's ceiling are both a tick stale.
  */
 
-import { CAMERA, DIRECTOR, HITSTOP, ITEMS, SIM, type EnemyArchetypeId } from '../core/config';
+import { CAMERA, HITSTOP, ITEMS, SIM, type EnemyArchetypeId } from '../core/config';
 import type { EventBus, EventSink } from '../core/events';
 import type { InputIntent } from '../core/input';
 import { createRng, seedFromString, type Rng } from '../core/math/rng';
@@ -73,12 +73,13 @@ import {
   type WeaponTickResult,
 } from './player/weapon';
 import { createDirector, type Director, type SpawnCommand, type DirectorContext } from './director/Director';
+import { totalSmallEnemies } from './director/deployment';
 import { createItemSystem, type Explosion, type ItemSystem } from './items/throwable';
 
 /** How the world is constructed. Everything injectable is injected. */
 export interface WorldOptions {
   readonly events: EventBus;
-  /** Simulation seed. Same seed, same level, same spread pattern, same waves. */
+  /** Simulation seed. Same seed, same level, same spread pattern, same spawn points. */
   readonly seed?: number;
   /** Overrides the level's own seed. Tests use it to pin a layout. */
   readonly levelSeed?: number;
@@ -111,12 +112,9 @@ export interface WorldStats {
 interface PendingSpawn {
   readonly orderId: number;
   readonly position: Vector3;
-  readonly healthScale: number;
   readonly warning: number;
   /** True for the large enemy. */
   readonly boss: boolean;
-  /** Why the large enemy was released; carried so `boss:spawned` can report it. */
-  readonly bossReason: 'cleared' | 'timeout';
   /** Seconds of warning left. */
   remaining: number;
 }
@@ -131,7 +129,7 @@ export interface World {
   readonly combat: CombatSystem;
   readonly events: EventSink;
   readonly stats: WorldStats;
-  /** The wave director, for the HUD and the debug panel to read. */
+  /** The run's director, for the HUD and the debug panel to read. */
   readonly director: Director;
   /** The in-flight thrown items, for the render layer to draw. */
   readonly items: ItemSystem;
@@ -209,37 +207,31 @@ export function createWorld(options: WorldOptions): World {
   const items = createItemSystem();
 
   /**
-   * The wave director's own random stream.
+   * The director's own random stream.
    *
-   * Derived rather than shared with `combat`. The combat stream is consumed twice per
-   * bullet for spread, so a shared stream would make spawn positions depend on how
-   * many shots the player happened to fire — and the same seed would then produce two
-   * different runs, which is exactly what "same seed, same sequence" forbids.
+   * Derived rather than shared with `combat`. Under the phase-10 script this stream has one
+   * job left — *where* a body appears — and it still must not be shared: the combat stream
+   * is consumed twice per bullet for spread, so a shared one would make spawn positions
+   * depend on how many shots the player happened to fire, and the same seed would then
+   * produce two different runs, which is exactly what "same seed, same sequence" forbids.
    */
   const director = createDirector({
     seed: seed ^ 0x51ed,
     events: {
-      waveStarted(plan) {
-        events.emit('wave:started', {
+      assaultStarted(script) {
+        events.emit('assault:started', {
           tick: stats.ticks,
-          wave: plan.wave + 1,
-          smallCount: plan.smallCount,
-          bossTimer: plan.bossTimer,
-          breathing: plan.breathing,
+          totalSmall: script.totalSmall,
+          totalDrops: script.totalDrops,
+          firstDropIn: script.firstDropAt,
         });
       },
-      waveCleared(plan, reward) {
-        events.emit('wave:cleared', { tick: stats.ticks, wave: plan.wave + 1, breathing: plan.breathing });
-        if (reward > 0) charges = clamp(charges + reward, 0, ITEMS.maxCharges);
-        // A clearing shot leaves bodies in the world that the player still has to
-        // deal with; the banner says so rather than letting the next wave appear to
-        // arrive early.
-      },
-      bossSpawned(order, reason) {
-        // Recorded, not published: `boss:spawned` needs the enemy id, and the body
-        // does not exist until the warning elapses. Publishing a placeholder id here
-        // would make every subscriber's `byId` lookup fail.
-        pendingBossReason.set(order.orderId, reason);
+      fieldCleared(totalSmall) {
+        events.emit('field:cleared', { tick: stats.ticks, totalSmall });
+        // The run's one top-up. Phase 3 paid this per breathing wave; a script has a
+        // single "the field is clear" beat, and it is the moment before the Warden, which
+        // is exactly when a player wants the belt full.
+        charges = clamp(charges + ITEMS.chargesPerClear, 0, ITEMS.maxCharges);
       },
       spawnPending(order, archetype) {
         events.emit('spawn:pending', {
@@ -251,9 +243,9 @@ export function createWorld(options: WorldOptions): World {
       },
       runEnded(outcome) {
         if (outcome === 'victory') {
-          events.emit('run:victory', { tick: stats.ticks, waves: director.status.wave, elapsed: time });
+          events.emit('run:victory', { tick: stats.ticks, elapsed: time });
         } else {
-          events.emit('run:defeat', { tick: stats.ticks, wave: director.status.wave, elapsed: time });
+          events.emit('run:defeat', { tick: stats.ticks, elapsed: time });
         }
       },
     },
@@ -279,13 +271,21 @@ export function createWorld(options: WorldOptions): World {
    * Enemies whose warning is still running.
    *
    * The delay is the player's only notice that a patch of ground is about to become
-   * dangerous, and it is why a spawn is a *place* rather than a surprise. The queue is
-   * also where the concurrency cap gets its final say: the director bounds its own
-   * in-flight orders, and this bounds what can actually exist.
+   * dangerous, and it is why a spawn is a *place* rather than a surprise. The queue is also
+   * the last word on how many bodies may exist: the director bounds its own in-flight
+   * orders (`maxLiveSmall` below), and this is where that bound is applied.
    */
   const pending: PendingSpawn[] = [];
-  /** Order id → why the large enemy was released, until the body appears. */
-  const pendingBossReason = new Map<number, 'cleared' | 'timeout'>();
+  /**
+   * The release queue's ceiling on live small enemies.
+   *
+   * Derived from the script rather than configured: the director cannot ask for more
+   * bodies than the script contains, so this can only ever fire if that stops being true.
+   * It replaced `DIRECTOR.maxConcurrentSmall`, which was a *pressure* cap under the phase-3
+   * curve and would have silently clipped the third drop of the phase-10 script (14 < 15).
+   * Read once, at construction, so the hot path allocates nothing.
+   */
+  const maxLiveSmall = totalSmallEnemies();
   /** Reused so the director tick allocates nothing. */
   const orders: SpawnCommand[] = [];
   /** Reused so the item tick allocates nothing. */
@@ -369,10 +369,10 @@ export function createWorld(options: WorldOptions): World {
     if (result.died) events.emit('player:died', { tick: stats.ticks });
   });
 
-  /** The large enemy's death, published once, with the wave it belonged to. */
+  /** The Warden's death, published once. */
   events.on('enemy:died', (payload) => {
     if (payload.archetype !== 'large') return;
-    events.emit('boss:died', { tick: stats.ticks, enemyId: payload.id, wave: director.status.wave });
+    events.emit('boss:died', { tick: stats.ticks, enemyId: payload.id });
   });
 
   const playerEye = { x: 0, y: 0, z: 0 };
@@ -381,7 +381,6 @@ export function createWorld(options: WorldOptions): World {
   const dropPending = (): void => {
     for (const queued of pending) {
       director.abandonSpawn(queued.orderId);
-      pendingBossReason.delete(queued.orderId);
     }
     pending.length = 0;
   };
@@ -392,10 +391,8 @@ export function createWorld(options: WorldOptions): World {
       pending.push({
         orderId: order.orderId,
         position: { x: order.position.x, y: order.position.y, z: order.position.z },
-        healthScale: order.healthScale,
         warning: order.warning,
         boss: order.boss,
-        bossReason: pendingBossReason.get(order.orderId) ?? 'cleared',
         remaining: order.warning,
       });
     }
@@ -404,40 +401,52 @@ export function createWorld(options: WorldOptions): World {
   /**
    * Counts the warning down and spawns whatever is due.
    *
-   * The capacity check lives here rather than in the director because this is the
-   * only place a body is actually created, and a cap enforced somewhere other than
-   * where the thing happens is a cap that eventually gets bypassed. The director
-   * applies the same limit to its own in-flight orders, so in practice nothing is
-   * blocked here — this is the backstop, and it is what the concurrency assertion
-   * actually reads.
+   * The ceiling check lives here rather than in the director because this is the only place
+   * a body is actually created, and a bound enforced somewhere other than where the thing
+   * happens is a bound that eventually gets bypassed. It is derived from the script, so in
+   * practice nothing is ever blocked here — the director cannot order more bodies than the
+   * script contains — which makes this the backstop the "peak never exceeds the script's
+   * total" assertion actually reads.
    */
   const releaseDueSpawns = (dt: number): void => {
-    for (let i = pending.length - 1; i >= 0; i -= 1) {
+    /**
+     * Forward, **not** the reverse walk the cleanup loop uses.
+     *
+     * `splice` shifts the rest of the queue down, so the index only advances when nothing
+     * was removed. The order is observable now in a way it never was under the phase-3
+     * trickle: a whole drop is announced in one tick, and the bodies then appear in the
+     * order the player was told about them — the ground rings and the bodies they become
+     * line up, which is what makes "the ring you watched is the enemy you got" true.
+     */
+    let i = 0;
+    while (i < pending.length) {
       const queued = pending[i];
-      if (!queued) continue;
-      // The run may have ended while the warning was running: `acceptsPending` is
-      // then false, so the wave is cancelled rather than delivered onto a results
-      // screen.
+      if (!queued) {
+        i += 1;
+        continue;
+      }
+      // The run may have ended while the warning was running: `acceptsPending` is then
+      // false, so the run is cancelled rather than delivered onto a results screen.
       if (!director.acceptsPending()) {
         dropPending();
         return;
       }
       queued.remaining -= dt;
-      if (queued.remaining > 0) continue;
+      if (queued.remaining > 0) {
+        i += 1;
+        continue;
+      }
       const archetype: EnemyArchetypeId = queued.boss ? 'large' : 'small';
-      if (!queued.boss && enemies.liveCount('small') >= DIRECTOR.maxConcurrentSmall) {
+      if (!queued.boss && enemies.liveCount('small') >= maxLiveSmall) {
         // Saturated. The order is abandoned rather than retried: the director sees
-        // that the wave has not progressed and issues another one when there is
+        // that the run has not progressed and issues another one when there is
         // room, which keeps it at one live order per body.
         pending.splice(i, 1);
         director.abandonSpawn(queued.orderId);
         continue;
       }
       pending.splice(i, 1);
-      const spawned = enemies.spawn(archetype, queued.position, {
-        healthScale: queued.healthScale,
-        state: 'SPAWN',
-      });
+      const spawned = enemies.spawn(archetype, queued.position, { state: 'SPAWN' });
       director.confirmSpawn(queued.orderId);
       events.emit('enemy:spawned', {
         tick: stats.ticks,
@@ -446,14 +455,8 @@ export function createWorld(options: WorldOptions): World {
         position: { x: spawned.position.x, y: spawned.position.y, z: spawned.position.z },
       });
       if (queued.boss) {
-        events.emit('boss:spawned', {
-          tick: stats.ticks,
-          enemyId: spawned.id,
-          wave: director.status.wave,
-          reason: queued.bossReason,
-        });
+        events.emit('boss:spawned', { tick: stats.ticks, enemyId: spawned.id });
       }
-      pendingBossReason.delete(queued.orderId);
     }
   };
 
@@ -519,7 +522,8 @@ export function createWorld(options: WorldOptions): World {
      *   7. The shot: resolve rays and apply damage.
      *   8. Items: thrown-object integration, detonation and blast resolution.
      *   9. Cleanup: recycle dead enemies and release their attack slots.
-     *  10. Director: wave state machine, pending spawns, victory and defeat.
+     *  10. Director: the run's script (drops, the Warden's gate), pending spawns, and
+     *      the end of the run.
      */
     tick(dt, intent) {
       stats.ticks += 1;
@@ -723,7 +727,6 @@ export function createWorld(options: WorldOptions): World {
       director.reset();
       items.clear();
       pending.length = 0;
-      pendingBossReason.clear();
       orders.length = 0;
       explosions.length = 0;
       charges = options.startingCharges ?? ITEMS.startingCharges;

@@ -50,6 +50,15 @@ export interface HudElements {
   readonly ammoState: HTMLElement;
   readonly chargeCount: HTMLElement;
   readonly spreadHint: HTMLElement;
+  /**
+   * The opening countdown, top-centre ("第一批敌人还有 N 秒到达战场").
+   *
+   * Its own element rather than a `banner` call: a banner is transient by design (it
+   * removes itself after 1.6 s) and this one is a *live* readout whose number changes once
+   * a second for ten seconds — pushing it through `banner()` would restart the CSS
+   * animation on every tick of the number and make the line flash.
+   */
+  readonly countdown: HTMLElement;
   readonly stats: HTMLElement;
   readonly hint: HTMLElement;
   /** Full-screen red vignette, flashed when the player takes damage. */
@@ -142,14 +151,24 @@ export interface HudView {
   readonly metrics: LoopMetrics;
   /** Seconds the current banner has left. */
   readonly bannerRemaining: number;
-  /** Live enemies, for the debug line. Zero before the first wave. */
+  /** Live enemies, for the debug line. Zero during the opening countdown. */
   readonly enemiesAlive: number;
+  /** Small enemies the script has not released yet, for the debug line. */
+  readonly enemiesRemaining: number;
+  /**
+   * Seconds until the next drop, or `0` when there is nothing to count down.
+   *
+   * Only the opening has a countdown (see {@link countdownText}); later drops are announced
+   * by the ground ring and the spawn blip the game has used since phase 3, so this is the
+   * director's opening timer and zero in every other phase.
+   */
+  readonly countdownSeconds: number;
   /** True once the player has been killed. */
   readonly dead: boolean;
-  /** 1-based wave number the player is on. */
-  readonly wave: number;
-  /** Waves in the run, for the `wave / total` readout. */
-  readonly totalWaves: number;
+  /** 1-based number of the next drop. */
+  readonly batch: number;
+  /** Drops in the run, for the `batch / total` readout. */
+  readonly totalBatches: number;
   /** The run's seed, so a bug report can name the run that produced it. */
   readonly seed: number;
 }
@@ -193,6 +212,26 @@ export function healthTone(fraction: number): string {
   if (fraction > 0.6) return '#5ddc8a';
   if (fraction > 0.3) return '#ffcf5d';
   return '#ff6152';
+}
+
+/**
+ * The opening countdown, as one line of text.
+ *
+ * "第一批敌人还有 N 秒到达战场" — the brief's "十秒" replaced by the live number, which is
+ * the whole point of the line: it is a *countdown*, not an announcement. It says "第一批"
+ * because the opening is the only stretch a run has nothing on the field and ten seconds to
+ * fill; drops two through five are announced the way every other spawn is (a ground ring
+ * plus a blip), and inventing four more countdowns would be four more things on screen
+ * saying what the ring already says.
+ *
+ * `ceil` rather than `round`, with a floor of 1: a line that reads "还有 1 秒" has to mean
+ * there is time left, and the element is hidden the moment the director stops reporting a
+ * countdown — so the number never reaches 0 on screen. The floor covers the sub-second
+ * sliver before that happens.
+ */
+export function countdownText(seconds: number): string {
+  const shown = Math.max(1, Math.ceil(seconds));
+  return `第一批敌人还有 ${shown} 秒到达战场`;
 }
 
 /**
@@ -262,6 +301,8 @@ export function createHud(elements: HudElements): Hud {
   let lastStatsLines = '';
   let lastDead = false;
   let lastAiming = false;
+  let lastCountdown = '';
+  let lastCountdownShown = false;
   let bannerTimer: number | null = null;
 
   /**
@@ -337,6 +378,23 @@ export function createHud(elements: HudElements): Hud {
       // --- Spread readout -----------------------------------------------------
       elements.spreadHint.style.opacity = view.spreadDeg > 1.2 ? '1' : '0';
 
+      // --- Opening countdown --------------------------------------------------
+      // Written only when the whole string changes, which is once a second at most: the
+      // number is the only part that moves, and a DOM write per frame for a line that
+      // changes 10 times in 10 seconds is exactly the layout thrash this file avoids.
+      const countdownShown = view.countdownSeconds > 0;
+      if (countdownShown !== lastCountdownShown) {
+        elements.countdown.hidden = !countdownShown;
+        lastCountdownShown = countdownShown;
+      }
+      if (countdownShown) {
+        const line = countdownText(view.countdownSeconds);
+        if (line !== lastCountdown) {
+          elements.countdown.textContent = line;
+          lastCountdown = line;
+        }
+      }
+
       // --- Debug stats --------------------------------------------------------
       // Rebuilt as a single string only when it changes, so an idle HUD costs
       // zero DOM writes rather than one per field per frame.
@@ -346,7 +404,7 @@ export function createHud(elements: HudElements): Hud {
         `step ${m.stepMs.toFixed(2)}ms  draw ${m.renderMs.toFixed(2)}ms\n` +
         `steps/frame ${m.stepsLastFrame}  dropped ${m.droppedStepFrames}\n` +
         `spread ${view.spreadDeg.toFixed(2)}°  fov ${view.fovDeg.toFixed(1)}°\n` +
-        `wave ${view.wave}/${view.totalWaves}  enemies ${view.enemiesAlive}\n` +
+        `batch ${view.batch}/${view.totalBatches}  alive ${view.enemiesAlive}  left ${view.enemiesRemaining}\n` +
         `seed ${view.seed >>> 0}`;
       if (lines !== lastStatsLines) {
         elements.stats.textContent = lines;

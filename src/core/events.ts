@@ -185,20 +185,38 @@ export interface GameEvents {
   'player:adsChanged': { tick: number; aiming: boolean };
   'debug:enabled': { enabled: boolean };
 
-  // --- Wave director (phase 3) ----------------------------------------------
+  // --- The run's script (phase 10; the wave director's events until then) -----
   //
   // Every one of these carries `tick`. The `[HITLOG]` tolerance checks and the
   // cross-shot crosstalk filter both key off it, and a run event without a tick is
   // impossible to line up against the shot log that explains it.
-  'wave:started': {
+  /**
+   * The run started: the countdown is on screen and the first drop is on its way.
+   *
+   * **Once per run**, where `wave:started` used to arrive once per wave with a plan
+   * attached. The interesting numbers are now the script's, not a curve's: how many small
+   * enemies the whole run contains and how long the opening lasts.
+   */
+  'assault:started': {
     tick: number;
-    /** 1-based wave number, for the HUD. The director's index is 0-based. */
-    wave: number;
-    smallCount: number;
-    bossTimer: number;
-    breathing: boolean;
+    /** Small enemies the run releases in total (the sum of the drops). */
+    totalSmall: number;
+    /** How many drops the run has. */
+    totalDrops: number;
+    /** Seconds until the first drop — the number the on-screen countdown counts. */
+    firstDropIn: number;
   };
-  'wave:cleared': { tick: number; wave: number; breathing: boolean };
+  /**
+   * Every drop is out and the arena is empty: the beat before the Warden.
+   *
+   * The only place a run's throwable belt is topped up, and the cue that the boss is
+   * about to be released.
+   */
+  'field:cleared': {
+    tick: number;
+    /** Small enemies that had to die for this. The script's total. */
+    totalSmall: number;
+  };
   /**
    * An enemy is about to appear at `position`.
    *
@@ -216,29 +234,29 @@ export interface GameEvents {
   /** The enemy announced by `spawn:pending` is now in the world. */
   'enemy:spawned': { tick: number; enemyId: number; archetype: EnemyArchetypeId; position: Vector3 };
   /**
-   * The large enemy was released.
+   * The Warden's body exists.
    *
-   * One event with a `reason`, not two events. Both causes are the same fact —
-   * "the wave's large enemy is now active" — and two names would mean two
-   * subscription sites, one of which would eventually miss a fix.
+   * No `reason` any more: there is exactly one way it is released ("the field is clear"),
+   * so a field that could only ever hold one value was a field waiting to be read as a
+   * rule. The order itself is announced by `spawn:pending` with `archetype: 'large'`,
+   * which is what the ground ring and the boss warning sound are drawn from.
    */
   'boss:spawned': {
     tick: number;
     enemyId: number;
-    wave: number;
-    reason: 'cleared' | 'timeout';
   };
-  'boss:died': { tick: number; enemyId: number; wave: number };
+  'boss:died': { tick: number; enemyId: number };
   'item:thrown': { tick: number; position: Vector3; direction: Vector3; chargesLeft: number };
   'item:exploded': { tick: number; position: Vector3; radius: number; hits: number };
   /**
    * The run ended. Published once, and afterwards the director stops spawning.
    *
-   * `elapsed` is the run's simulated seconds, which is what the results screen
-   * reports and what makes "a run is 10-15 minutes" a reading rather than a claim.
+   * `elapsed` is the run's simulated seconds, which is what the results screen reports.
+   * There is no wave number on either outcome any more: a run is one script, and "你倒在
+   * 第 N 波" cannot be said about it.
    */
-  'run:victory': { tick: number; waves: number; elapsed: number };
-  'run:defeat': { tick: number; wave: number; elapsed: number };
+  'run:victory': { tick: number; elapsed: number };
+  'run:defeat': { tick: number; elapsed: number };
 }
 
 export type GameEventName = keyof GameEvents;

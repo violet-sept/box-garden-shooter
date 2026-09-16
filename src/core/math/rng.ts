@@ -2,7 +2,7 @@
  * Seeded pseudo-random numbers.
  *
  * `Math.random()` is banned in this codebase (technical plan §4.2): the
- * simulation has to be reproducible so wave layouts, spread and spawn points can
+ * simulation has to be reproducible so spawn points, spread and the level layout can
  * be asserted in tests and replayed from a seed. Every stochastic system takes
  * an {@link Rng} by injection rather than reaching for a global.
  *
@@ -65,7 +65,7 @@ export function createRng(seed: number): Rng {
 /**
  * A deterministic hash of a string into a 32-bit seed.
  *
- * Lets a system derive a stable seed from a readable key ("level", "wave-3")
+ * Lets a system derive a stable seed from a readable key ("level", "director")
  * instead of hard-coding magic numbers all over the codebase.
  */
 export function seedFromString(key: string): number {

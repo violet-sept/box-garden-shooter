@@ -21,8 +21,8 @@
  *
  * ## Movement and speed
  *
- * The configured top speed (`moveSpeed`, 5.2) is the number the HUD, the wave
- * pacing and the difficulty are all tuned against, so it is the *ceiling* on every
+ * The configured top speed (`moveSpeed`, 5.2) is the number the weapon's time-to-kill,
+ * the drop pacing and the difficulty are all tuned against, so it is the *ceiling* on every
  * non-attack state. `attackMoveSpeed` (9.0) is a dash-speed budget the archetype
  * spends only on the strike itself; using it to reposition would make Stalkers
  * that are *waiting* visibly faster than the ones closing in, which is backwards

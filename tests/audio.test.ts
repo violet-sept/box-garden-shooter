@@ -227,12 +227,13 @@ describe('event to sound mapping', () => {
     expect(idsFor('weapon:reloadFinished', { tick: 1, empty: true })).toEqual(['reloadFinished']);
     expect(idsFor('item:thrown', { tick: 1, position: P, direction: P, chargesLeft: 2 })).toEqual(['itemThrown']);
     expect(idsFor('item:exploded', { tick: 1, position: P, radius: 5.5, hits: 3 })).toEqual(['itemExploded']);
-    expect(idsFor('wave:started', { tick: 1, wave: 2, smallCount: 9, bossTimer: 70, breathing: false })).toEqual([
-      'waveStarted',
-    ]);
-    expect(idsFor('boss:spawned', { tick: 1, enemyId: 1, wave: 2, reason: 'cleared' })).toEqual(['bossSpawned']);
-    expect(idsFor('run:victory', { tick: 1, waves: 8, elapsed: 600 })).toEqual(['runVictory']);
-    expect(idsFor('run:defeat', { tick: 1, wave: 3, elapsed: 200 })).toEqual(['runDefeat']);
+    expect(
+      idsFor('assault:started', { tick: 1, totalSmall: 30, totalDrops: 5, firstDropIn: 10 }),
+    ).toEqual(['assaultStarted']);
+    expect(idsFor('field:cleared', { tick: 1, totalSmall: 30 })).toEqual(['fieldCleared']);
+    expect(idsFor('boss:spawned', { tick: 1, enemyId: 1 })).toEqual(['bossSpawned']);
+    expect(idsFor('run:victory', { tick: 1, elapsed: 600 })).toEqual(['runVictory']);
+    expect(idsFor('run:defeat', { tick: 1, elapsed: 200 })).toEqual(['runDefeat']);
   });
 
   it('stays silent where a sound would carry no information', () => {
@@ -240,7 +241,7 @@ describe('event to sound mapping', () => {
     // the shot's tail instead. `boss:died` is already the Warden's `enemy:died`.
     expect(idsFor('bullet:impact', { tick: 1, shotId: 1, point: P, normal: P, surface: 'concrete', distance: 3 })).toEqual([]);
     expect(idsFor('bullet:miss', { tick: 1, shotId: 1, end: P })).toEqual([]);
-    expect(idsFor('boss:died', { tick: 1, enemyId: 1, wave: 2 })).toEqual([]);
+    expect(idsFor('boss:died', { tick: 1, enemyId: 1 })).toEqual([]);
     expect(idsFor('weapon:reloadCancelled', { tick: 1 })).toEqual([]);
     expect(idsFor('player:died', { tick: 1 })).toEqual([]);
   });

@@ -26,7 +26,8 @@ import { describe, expect, it } from 'vitest';
 import { createWorld } from '#/game/World';
 import { EventBus } from '#/core/events';
 import { createPerfScene } from '#/debug/perfScene';
-import { DIRECTOR, PERF, SIM } from '#/core/config';
+import { PERF, SIM } from '#/core/config';
+import { totalSmallEnemies } from '#/game/director/deployment';
 import {
   readFlag,
   readQueryParam,
@@ -138,8 +139,10 @@ describe('simulation performance at the brief\'s worst case', () => {
     const atEnd = world.enemies.targets.length;
 
     // The steady state is the population plus the practice dummies plus whatever the
-    // director has released on top.
-    expect(atEnd).toBeLessThanOrEqual(PERF.entityCount + DIRECTOR.maxConcurrentTotal + 8);
+    // director has released on top. The director's share is the script's *whole* small
+    // total rather than what thirty seconds of it happens to release: the bound is meant
+    // to catch a store that grows without limit, not to restate the schedule.
+    expect(atEnd).toBeLessThanOrEqual(PERF.entityCount + totalSmallEnemies() + 8);
     // The leak canary: a store that grew with the *kill count* would be far past this
     // by the second half of a thirty-second run.
     expect(atEnd).toBeLessThanOrEqual(atHalf + 4);

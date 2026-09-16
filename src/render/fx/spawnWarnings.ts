@@ -30,7 +30,15 @@ import {
 import { DIRECTOR } from '../../core/config';
 import type { EventSink, GameEvents } from '../../core/events';
 
-/** Concurrent warnings. A late wave's burst is the worst case, plus slack. */
+/**
+ * Concurrent warnings.
+ *
+ * The worst case used to be "a late wave's burst"; under the phase-10 script it is exactly
+ * one drop — the last one announces **ten** bodies in a single tick — plus the Warden's own
+ * ring when the field clears, so 16 holds with slack. A drop is never re-announced while an
+ * earlier one is still ringing (they are ten seconds apart and a warning lasts 0.9 s), so
+ * this is a ceiling rather than a churn rate.
+ */
 const WARNING_POOL = 16;
 
 /** Colour of a small enemy's arrival ring. Cool, so it reads as information. */
